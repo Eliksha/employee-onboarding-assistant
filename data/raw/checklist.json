@@ -1,0 +1,92 @@
+[
+  {
+    "id": 1,
+    "phase": "Day 1",
+    "task": "Collect laptop and ID card",
+    "done": false
+  },
+  {
+    "id": 2,
+    "phase": "Day 1",
+    "task": "Set up company email and MFA",
+    "done": false
+  },
+  {
+    "id": 3,
+    "phase": "Day 1",
+    "task": "Meet your manager and onboarding buddy",
+    "done": false
+  },
+  {
+    "id": 4,
+    "phase": "Day 1",
+    "task": "Log in to NovaConnect and mark attendance",
+    "done": false
+  },
+  {
+    "id": 5,
+    "phase": "Week 1",
+    "task": "Complete HR documentation",
+    "done": false
+  },
+  {
+    "id": 6,
+    "phase": "Week 1",
+    "task": "Enrol in group health insurance (within 15 days)",
+    "done": false
+  },
+  {
+    "id": 7,
+    "phase": "Week 1",
+    "task": "Install NovaVPN from ServiceHub",
+    "done": false
+  },
+  {
+    "id": 8,
+    "phase": "Week 1",
+    "task": "Complete security awareness training",
+    "done": false
+  },
+  {
+    "id": 9,
+    "phase": "Week 1",
+    "task": "Submit provisional tax declaration (within 2 weeks)",
+    "done": false
+  },
+  {
+    "id": 10,
+    "phase": "Week 1",
+    "task": "Review the employee handbook",
+    "done": false
+  },
+  {
+    "id": 11,
+    "phase": "Month 1",
+    "task": "Complete POSH and code of conduct course",
+    "done": false
+  },
+  {
+    "id": 12,
+    "phase": "Month 1",
+    "task": "Set 30-60-90 day goals with your manager",
+    "done": false
+  },
+  {
+    "id": 13,
+    "phase": "Month 1",
+    "task": "Review the holiday list and plan leave",
+    "done": false
+  },
+  {
+    "id": 14,
+    "phase": "Month 1",
+    "task": "Submit any pending expense claims",
+    "done": false
+  },
+  {
+    "id": 15,
+    "phase": "Month 1",
+    "task": "Share onboarding feedback with HR",
+    "done": false
+  }
+]
