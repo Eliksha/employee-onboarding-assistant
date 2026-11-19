@@ -4,6 +4,7 @@ pydantic-settings
 python-dotenv
 openai
 faiss-cpu
+fastembed
 numpy
 pypdf
 streamlit
