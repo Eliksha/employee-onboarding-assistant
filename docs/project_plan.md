@@ -142,3 +142,10 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Confirmed no references to these filenames in frontend source or configuration files before removal.
 - Retained favicon.svg for future browser icon configuration.
 - No application logic, API routes, or database functionality was modified.
+
+### Documentation Cleanup — 20 November 2026
+
+- Removed the redundant project_plan_backup.md from the active repository.
+- Retained docs/project_plan.md as the authoritative project plan.
+- Preserved historical project decisions through existing backups and Git history.
+- No application functionality or database records were modified.
