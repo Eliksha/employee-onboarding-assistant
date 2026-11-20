@@ -127,3 +127,11 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Purpose: Ensure PostgreSQL connectivity dependencies are included in fresh installations and future deployment environments.
 - Existing application functionality and database records remain unchanged by this dependency update.
 
+
+### PostgreSQL Configuration Documentation — 20 November 2026
+
+- Added DB_BACKEND and PG_* connection variables to .env.example.
+- Documented PostgreSQL 16 as the intended database backend.
+- Preserved SQLite as an available local fallback.
+- No changes made to the private .env file or existing database records.
+- Database credentials must remain outside version control.
