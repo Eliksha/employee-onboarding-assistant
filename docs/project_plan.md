@@ -149,3 +149,10 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Retained docs/project_plan.md as the authoritative project plan.
 - Preserved historical project decisions through existing backups and Git history.
 - No application functionality or database records were modified.
+
+### Frontend Documentation Cleanup — 20 November 2026
+
+- Replaced the default React/Vite README with OnboardAI-specific frontend documentation.
+- Removed outdated README_ONBOARDAI.txt.
+- Preserved Vite, ESLint, and favicon configuration files.
+- No application logic, API endpoints, or database records were modified.

@@ -1,16 +1,42 @@
-# React + Vite
+﻿# OnboardAI — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite frontend for OnboardAI: RAG-Powered New Joiner Support Platform.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Employee dashboard and demo employee selector
+- AI Assistant with employee-specific chat history
+- Interactive onboarding checklist
+- Leave balances and payroll calendar
+- IT asset information
+- Support ticket creation and history
 
-## React Compiler
+## Local Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Prerequisites
 
-## Expanding the ESLint configuration
+- Node.js and npm
+- Running OnboardAI FastAPI backend
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Start the Backend
+
+From the project root:
+
+python -m uvicorn backend.main:app --reload --port 8000
+
+### Start the Frontend
+
+From the frontend directory:
+
+npm install
+npm run dev
+
+Open http://localhost:5173.
+
+## Important Notes
+
+- The employee selector is for synthetic demo data only.
+- The selector does not provide authentication or authorization.
+- Backend API endpoints must be available for employee features.
+- Azure is the target deployment platform.
+- Groq is a temporary development LLM integration.
