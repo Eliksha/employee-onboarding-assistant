@@ -156,3 +156,10 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Removed outdated README_ONBOARDAI.txt.
 - Preserved Vite, ESLint, and favicon configuration files.
 - No application logic, API endpoints, or database records were modified.
+
+### Backend Test Verification — 20 November 2026
+
+- Executed automated tests with DB_BACKEND=sqlite.
+- Result: 16 tests passed in 5.74 seconds.
+- No test failures.
+- PostgreSQL was not used for this test run.
