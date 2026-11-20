@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.config import settings
-from backend.services import ingest, llm, retriever
+from backend.services import guardrails, ingest, llm, retriever
 from scripts import rag_eval as ev
 
 
@@ -65,8 +65,8 @@ def test_retrieval_relevance_on_onboarding_questions(real_retriever):
             misses.append(f"{cid}: expected section not in top-{settings.top_k}")
         elif not any(f.lower() in ev._ctx(hits).lower() for f in facts):
             misses.append(f"{cid}: fact not retrieved")
-        elif hits[0]["score"] < settings.similarity_threshold:
-            misses.append(f"{cid}: top score {hits[0]['score']:.3f} below threshold")
+        elif not guardrails.retrieval_gate(q, hits)[0]:
+            misses.append(f"{cid}: rejected by retrieval gate (top {hits[0]['score']:.3f})")
     assert not misses, misses
 
 

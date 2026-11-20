@@ -1,11 +1,32 @@
+import os
 import re
 import zlib
+
+# Force SQLite before backend.config is imported, regardless of DB_BACKEND in .env.
+os.environ["DB_BACKEND"] = "sqlite"
 
 import numpy as np
 import pytest
 
 from backend.config import settings
-from backend.services import embeddings, retriever
+from backend.services import embeddings, postgres, retriever
+
+
+class PostgresBlockedInTests(RuntimeError):
+    """Raised if any test code path tries to open a PostgreSQL connection."""
+
+
+@pytest.fixture(autouse=True)
+def isolated_database(tmp_path, monkeypatch):
+    """Every test uses a throwaway SQLite file; PostgreSQL connections are hard-blocked."""
+
+    def _blocked(*args, **kwargs):
+        raise PostgresBlockedInTests("PostgreSQL access is blocked during tests")
+
+    monkeypatch.setattr(settings, "db_backend", "sqlite")
+    monkeypatch.setattr(settings, "db_path", tmp_path / "isolated_test.db")
+    monkeypatch.setattr(postgres.psycopg2, "connect", _blocked)
+    yield
 
 
 def fake_embed(texts):

@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     model_name: str = "qwen/qwen3.8-27b"
     embed_model: str = "BAAI/bge-small-en-v1.5"
     similarity_threshold: float = 0.65
+    # Scores in [threshold - margin, threshold) reach the LLM only with keyword corroboration.
+    borderline_margin: float = 0.05
     top_k: int = 4
     chunk_words: int = 350
     chunk_overlap_words: int = 40

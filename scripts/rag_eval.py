@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from backend.config import settings
-from backend.services import db, embeddings, ingest, llm, rag, retriever
+from backend.services import db, embeddings, guardrails, ingest, llm, rag, retriever
 
 ROOT = Path(__file__).resolve().parent.parent
 REPORT_PATH = ROOT / "docs" / "rag_eval_report.md"
@@ -82,6 +82,28 @@ RETRIEVAL_CASES = [
     ("R13", "Onboarding", "What goals do new joiners set with their manager?",
      ["8. Performance Management"],
      ["30-60-90 day goals"], ["30-60-90"]),
+    # Step 5: answerable questions whose top score is below 0.65 (borderline band 0.60-0.65).
+    ("R14", "Borderline", "Who gives me an ID card?",
+     ["5.1 Laptop and Accounts", "FAQ: When do I get my laptop"],
+     ["IT issues a laptop and ID card on the first day of joining"], ["first day"]),
+    ("R15", "Borderline", "Is there money for certifications?",
+     ["4.3 Learning Budget", "FAQ: What is the learning budget"],
+     ["Rs 30,000"], ["30,000"]),
+    ("R16", "Borderline", "Is there a counselling helpline for employees?",
+     ["4.4 Wellness", "FAQ: Is there a wellness benefit"],
+     ["24x7"], ["24x7"]),
+    ("R17", "Borderline", "Can I work from home on Fridays?",
+     ["1. Working Hours", "FAQ: What are the office days"],
+     ["may work from home on Monday and Friday"], ["Friday"]),
+]
+
+# Answerable questions the current retrieval does NOT handle. Reported for transparency,
+# excluded from pass/fail counts: (id, question, expected section substrings, reason)
+KNOWN_GAP_CASES = [
+    ("K01", "Is there a cab if I work late?", ["7. Expenses and Travel"],
+     "embedding recall miss: Handbook 7 not in top-k"),
+    ("K02", "What happens if I come in late often?", ["1. Working Hours"],
+     "relevant chunk retrieved but top score below the 0.60 band floor"),
 ]
 
 # (id, question, terms that must NOT occur anywhere in data/raw - proves the answer is absent)
@@ -233,14 +255,26 @@ def eval_retrieval():
         rank = section_rank(hits, sections)
         fact_ok = any(f.lower() in _ctx(hits).lower() for f in facts)
         top = hits[0]["score"] if hits else 0.0
-        above = top >= settings.similarity_threshold
+        above, gate = guardrails.retrieval_gate(q, hits)
         ok = rank is not None and fact_ok and above
         rr.append(1.0 / rank if rank else 0.0)
         srcs = "; ".join(f"{h['source']}#{h['section'][:38]} ({h['score']:.3f})" for h in hits)
-        note = f"rank={rank}, fact_retrieved={fact_ok}, top={top:.3f}{'' if above else ' BELOW THRESHOLD'}"
+        note = f"rank={rank}, fact_retrieved={fact_ok}, top={top:.3f}, gate={gate}"
         rows.append((cid, cat, q, PASS if ok else FAIL, note, srcs))
     mrr = sum(rr) / len(rr) if rr else 0.0
     return rows, mrr
+
+
+def eval_known_gaps():
+    """Informational: answerable questions current retrieval is known to miss."""
+    rows = []
+    for cid, q, sections, reason in KNOWN_GAP_CASES:
+        hits = retriever.search(q, settings.top_k)
+        rank = section_rank(hits, sections)
+        gate_ok, gate = guardrails.retrieval_gate(q, hits)
+        status = "RESOLVED" if rank and gate_ok else "GAP"
+        rows.append((cid, q, status, f"rank={rank}, top={hits[0]['score']:.3f}, gate={gate}; {reason}"))
+    return rows
 
 
 def _no_db_writes():
@@ -310,8 +344,17 @@ def eval_grounding(delay):
             emails = unsupported_emails(ans, ctx)
             if emails:
                 issues.append(f"unsupported emails: {emails}")
+            retrieved = {(h["source"], h["section"]) for h in hits}
+            api_src = [(x["file"], x["section"]) for x in r["sources"]]
+            if not api_src:
+                issues.append("API returned no sources")
+            elif any(x not in retrieved for x in api_src):
+                issues.append("API source not among retrieved passages")
+            elif len(api_src) == len(hits) and len(hits) > 1:
+                issues.append("API returned every retrieved chunk (not only cited)")
         rows.append((cid.replace("R", "G"), cat, q, FAIL if issues else PASS,
-                     "; ".join(issues) or f"cites={citations(ans)}", ans.replace("\n", " ")))
+                     "; ".join(issues) or f"cites={citations(ans)} -> sources={[x['section'][:30] for x in r['sources']]}",
+                     ans.replace("\n", " ")))
         time.sleep(delay)
     return rows
 
@@ -321,7 +364,8 @@ def eval_unknown(llm_ok, delay):
     for cid, q, _ in UNKNOWN_CASES:
         hits = retriever.search(q, settings.top_k)
         top = hits[0]["score"] if hits else 0.0
-        gate = "threshold" if top < settings.similarity_threshold else "LLM (score above threshold)"
+        gate_ok, gate_reason = guardrails.retrieval_gate(q, hits)
+        gate = f"LLM ({gate_reason})" if gate_ok else f"retrieval gate ({gate_reason})"
         if not llm_ok:
             rows.append((cid, q, f"{top:.3f}", gate, NOT_TESTED, "LLM unavailable", ""))
             continue
@@ -338,7 +382,7 @@ def eval_unknown(llm_ok, delay):
         else:
             status, note = PASS, "abstained with escalation guidance (FALLBACK)"
         rows.append((cid, q, f"{top:.3f}", gate, status, note, ans.replace("\n", " ")))
-        if gate != "threshold":
+        if gate_ok:
             time.sleep(delay)
     return rows
 
@@ -399,12 +443,14 @@ def _count(rows, idx):
     return {s: statuses.count(s) for s in (PASS, FAIL, NOT_TESTED)}
 
 
-def write_report(kb, info, retr, mrr, ground, unknown, inj, llm_note):
+def write_report(kb, info, retr, mrr, ground, unknown, inj, llm_note, gaps=()):
     L = ["# RAG Evaluation Report - Step 4", "",
          f"Date: {date.today().isoformat()}  ",
          f"Embedding: `{settings.embed_model}` | Index: FAISS `IndexFlatIP` (cosine) | "
          f"Top-k: `{settings.top_k}` | Similarity threshold: `{settings.similarity_threshold}`  ",
          f"LLM: `{settings.model_name}` via Groq (temporary) - preflight: {llm_note}  ",
+         f"Borderline band: `{settings.similarity_threshold - settings.borderline_margin:.2f}`-`{settings.similarity_threshold}` "
+         "(LLM called only with keyword corroboration); answers validated by `backend/services/guardrails.py`.  ",
          "Generated by `python -m scripts.rag_eval`. Chat-history writes were stubbed (no DB records created).", ""]
 
     summary = [("A. KB / index availability", _count(kb, 2)),
@@ -421,6 +467,9 @@ def write_report(kb, info, retr, mrr, ground, unknown, inj, llm_note):
     L += ["", "## B. Retrieval relevance (deterministic)", "",
           "| ID | Category | Question | Result | Observation | Retrieved sources (score) |", "|---|---|---|---|---|---|"]
     L += [f"| {a} | {b} | {_cell(c)} | {d} | {_cell(e)} | {_cell(f, 400)} |" for a, b, c, d, e, f in retr]
+    L += ["", "### Known retrieval gaps (informational, not counted)", "",
+          "| ID | Question | Status | Observation |", "|---|---|---|---|"]
+    L += [f"| {a} | {_cell(b)} | {c} | {_cell(d)} |" for a, b, c, d in gaps]
     L += ["", "## C. Answer grounding (LLM-dependent)", "",
           "Checks: answer found, expected KB fact present, citation present and pointing to a retrieved section, "
           "no numbers/emails absent from retrieved context.", "",
@@ -452,6 +501,7 @@ def main(argv=None):
         print("Knowledge base or index missing - aborting (the evaluator never rebuilds the index).")
         return 2
     retr, mrr = eval_retrieval()
+    gaps = eval_known_gaps()
 
     if args.no_llm:
         llm_ok, llm_note = False, "skipped (--no-llm)"
@@ -462,7 +512,7 @@ def main(argv=None):
     unknown = eval_unknown(llm_ok, args.delay)
     inj = eval_injection(llm_ok, args.delay)
 
-    summary = write_report(kb, info, retr, mrr, ground, unknown, inj, llm_note)
+    summary = write_report(kb, info, retr, mrr, ground, unknown, inj, llm_note, gaps)
     print(f"LLM preflight: {llm_note}")
     for name, c in summary:
         print(f"  {name:<40} pass={c[PASS]:<3} fail={c[FAIL]:<3} not_tested={c[NOT_TESTED]}")

@@ -1,10 +1,13 @@
 
 """RAG pipeline: retrieve -> threshold check -> grounded LLM answer -> save."""
 
-from typing import Dict
+import logging
+from typing import Dict, List
 
 from backend.config import settings
-from backend.services import db, llm, retriever
+from backend.services import db, guardrails, llm, retriever
+
+logger = logging.getLogger("app")
 
 
 FALLBACK = (
@@ -25,17 +28,11 @@ def answer_question(
     # Step 1: Retrieve relevant handbook chunks.
     hits = retriever.search(question, settings.top_k)
 
-    sources = [
-        {
-            "file": hit["source"],
-            "section": hit["section"],
-            "score": round(hit["score"], 3),
-        }
-        for hit in hits
-    ]
+    # Step 2: Retrieval gate (threshold + corroborated borderline band).
+    gate_ok, gate_reason = guardrails.retrieval_gate(question, hits)
+    cited: List[Dict] = []
 
-    # Step 2: Check retrieval relevance.
-    if not hits or hits[0]["score"] < settings.similarity_threshold:
+    if not gate_ok:
         answer = FALLBACK
         found = False
 
@@ -43,13 +40,26 @@ def answer_question(
         # Step 3: Generate an answer using retrieved context.
         raw = llm.generate_answer(question, hits)
 
-        # Step 4: Prevent unsupported answers.
+        # Step 4: Prevent unsupported answers (NOT_FOUND, leaks, bad citations, unsupported facts).
         if not raw or llm.NOT_FOUND in raw.upper().replace(" ", "_"):
             answer = FALLBACK
             found = False
         else:
-            answer = raw
-            found = True
+            verdict = guardrails.validate_answer(raw, hits)
+            if verdict.ok:
+                answer = raw
+                found = True
+                cited = verdict.sources
+            else:
+                logger.warning("answer rejected by guardrails: %s (gate=%s)", verdict.reason, gate_reason)
+                answer = FALLBACK
+                found = False
+
+    # Only passages actually cited in the answer are returned as sources.
+    sources = [
+        {"file": h["source"], "section": h["section"], "score": round(h["score"], 3)}
+        for h in cited
+    ]
 
     # Step 5: Save chat history.
     if employee_id is not None:
@@ -59,7 +69,7 @@ def answer_question(
             question=question,
             answer=answer,
             found=found,
-            sources=sources if found else [],
+            sources=sources,
         )
     else:
         # Preserve compatibility with existing functionality.
@@ -74,7 +84,7 @@ def answer_question(
     return {
         "message_id": message_id,
         "answer": answer,
-        "sources": sources if found else [],
+        "sources": sources,
         "found": found,
-        "top_score": sources[0]["score"] if sources else 0.0,
+        "top_score": round(hits[0]["score"], 3) if hits else 0.0,
     }
