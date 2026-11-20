@@ -135,3 +135,10 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Preserved SQLite as an available local fallback.
 - No changes made to the private .env file or existing database records.
 - Database credentials must remain outside version control.
+
+### Frontend Asset Cleanup — 20 November 2026
+
+- Removed unused frontend assets: hero.png, react.svg, vite.svg, and icons.svg.
+- Confirmed no references to these filenames in frontend source or configuration files before removal.
+- Retained favicon.svg for future browser icon configuration.
+- No application logic, API routes, or database functionality was modified.
