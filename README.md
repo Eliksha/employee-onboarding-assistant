@@ -7,7 +7,7 @@ New joiners struggle to find approved onboarding information (leave, payroll, be
 A document-grounded AI assistant that answers onboarding questions from an approved handbook, shows sources, offers an onboarding checklist and escalates to HR/IT when it cannot answer.
 
 ## Planned stack
-- Frontend: Streamlit
+- Frontend: React + Vite
 - Backend: FastAPI
 - LLM: approved OpenAI API access
 - Retrieval: embeddings + FAISS (subject to validation)

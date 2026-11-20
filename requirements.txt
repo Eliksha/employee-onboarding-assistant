@@ -7,7 +7,6 @@ faiss-cpu
 fastembed
 numpy
 pypdf
-streamlit
 requests
 pytest
 httpx

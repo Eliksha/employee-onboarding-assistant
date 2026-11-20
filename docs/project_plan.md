@@ -1,38 +1,121 @@
-# Project Plan
+# OnboardAI — Project Plan
 
-## Milestones
-| Milestone | Day | Deliverable |
+**Project:** OnboardAI: RAG-Powered New Joiner Support Platform  
+**Domain:** Generative AI for Human Resources  
+**Team member:** Eliksha Maheshwari  
+**Location:** Pune  
+**Mentor:** Shankhalika Sarkar  
+**Last updated:** 20 November 2026
+
+## 1. Milestones
+
+| Milestone | Planned day | Deliverable | Current status |
+|---|---|---|---|
+| M1 — Design | 31 | Charter, architecture, repository, synthetic data | Completed for local prototype |
+| M2 — Backend + AI | 32 | FastAPI, RAG, FAISS, employee data APIs, orchestration | Implemented locally; Azure OpenAI migration pending |
+| M3 — UI + Middleware | 33 | React dashboard, chat, checklist, support center, validation | Implemented and manually tested |
+| M4 — Deploy + Test | 34 | Docker, Azure deployment, CI/CD, unit/integration/load/security tests | Local automated/API checks passed; deployment and remaining tests pending |
+| M5 — Wrap-up | After | Runbook, architecture diagrams, storyboard, slides, demo, final repository | Pending |
+
+## 2. Scope and Technology Decisions
+
+- **Backend:** Python, FastAPI, explicit deterministic agent orchestrator.
+- **AI:** Retrieval-augmented generation over onboarding/policy content, using embeddings and FAISS. Azure OpenAI is the **target** LLM service; Groq was used temporarily during development and must be replaced before Azure completion.
+- **Frontend:** React + Vite, connected to the FastAPI backend.
+- **Prototype persistence:** SQLite at `data/app.db`.
+- **Cloud target:** Azure only for the final solution. Production persistence, hosting, identity, secrets management, and monitoring require configuration and validation.
+- **Data:** Synthetic fictional employees only; demo selectors EMP001, EMP002, EMP003.
+- **Authentication:** Not implemented in the demo. An employee selector is **not** an authentication or authorization mechanism. Do not expose employee-specific APIs with real data or deploy them publicly without proper identity and access controls.
+
+## 3. Implementation Progress
+
+### Completed — Backend and data
+
+- Reviewed existing FastAPI routes and SQLite tables; backed up the database before migrations.
+- Applied non-destructive employee-specific migrations and synthetic seed data; preserved legacy records.
+- Added employee profile, leave balance, IT asset, payroll calendar, checklist, and support ticket endpoints.
+- Added employee-scoped chat history and request routing between employee information and policy/RAG responses.
+- Implemented explicit Python orchestration for the local prototype.
+- Added checklist updates via `PATCH /employees/{employee_id}/checklist/{item_id}`.
+- Added support ticket creation via `POST /employees/{employee_id}/tickets`.
+
+### Completed — Frontend
+
+- React/Vite OnboardAI dashboard and employee demo selector.
+- AI Assistant with employee-specific chat history.
+- Leave & Payroll and My Assets views.
+- Interactive checklist: mark complete/incomplete, persist changes, show progress and errors.
+- Support Center: create tickets, show feedback, and refresh employee-specific ticket history.
+
+### Completed — Verification (20 November 2026)
+
+| Verification | Observed result | Scope |
 |---|---|---|
-| M1 Design | 31 | Charter, architecture, repo, board, synthetic data |
-| M2 Backend + AI | 32 | FastAPI endpoints, embeddings, FAISS, grounded /chat, 15-question test results |
-| M3 UI + middleware | 33 | Streamlit chat + checklist, logging, validation, error handling |
-| M4 Deploy + test | 34 | Docker, Azure (or documented blocker), CI/CD, unit/integration/load tests |
-| M5 Wrap-up | After | Runbook, storyboard, slides, live demo, final repo |
+| `python -m pytest -q` | **16 passed in 6.25 s** | Existing automated test suite |
+| Live HTTP GET checks | **5/5 returned 200** | EMP001 profile, leave balances, checklist, assets, tickets |
+| Employee-ID consistency | **6/6 checks; 0 mismatches** | Checklist and ticket API records for EMP001–EMP003 |
+| SQLite schema inspection | Expected application tables present | `data/app.db` |
+| SQLite checklist persistence | **45 assignments**, including `done=0` and `done=1` | `checklist_assignments` |
+| SQLite support ticket persistence | **1 ticket** for EMP001, category IT, status `open` | `tickets` |
+| UI acceptance checks | Checklist and support tickets reported working | Local React/FastAPI integration |
 
-## Roles (solo)
-Eliksha holds all roles: architecture & integration, backend, AI/LLM, frontend, DevOps & QA.
+**Interpretation:** These checks support local functional correctness and employee-ID consistency. They do **not** demonstrate production-grade authorization, penetration testing, load readiness, or successful Azure deployment.
 
-## Risks
+## 4. Remaining Work — Prioritized
+
+1. **Security readiness:** Determine the identity approach for Azure deployment (e.g., Microsoft Entra ID), enforce backend authorization, protect ingestion/admin endpoints, verify RBAC and secret handling. Keep synthetic-only, access-controlled demo if authentication remains out of scope.
+2. **Azure OpenAI integration:** Replace temporary Groq usage; configure model deployments and environment variables securely; verify RAG answer quality, grounding, and fallback behavior.
+3. **Azure infrastructure:** Confirm subscription, permissions, region, quotas, resource availability, deployment architecture, and production database choice.
+4. **Container and deployment validation:** Verify Docker build/run, configure frontend/backend hosting, HTTPS, CORS, health checks, and environment separation.
+5. **Operational controls:** Add structured logging with minimal PII, monitoring, alerts, backup/restore and rollback procedures.
+6. **Quality assurance:** Add targeted API integration, authorization, failure-path, security, and load tests; record evidence and known limitations.
+7. **CI/CD:** Add automated checks and deployment pipeline, with secrets excluded from source control.
+8. **Final deliverables:** Update architecture diagrams, README, deployment/runbook, demo script, slides, and submission package.
+
+## 5. Roles
+
+Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/LLM, frontend, DevOps, QA, and documentation.
+
+## 6. Risks and Mitigations
+
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Missing OpenAI/Azure access | Blocks Days 32 and 34 | Confirm early; document blocker; local Docker fallback |
-| Hallucinated answers | Wrong guidance | Grounding prompt, threshold, sources, fallback |
-| Poor retrieval | Irrelevant answers | Tune chunk size/top-k; 15-question test set |
-| Secret leak | Security incident | .gitignore, .env.example, rotate if exposed |
-| Solo time overrun | Incomplete MVP | Narrow MVP, daily review, cut list |
+| Azure access, quota, or model deployment unavailable | Blocks cloud integration/deployment | Confirm subscription, region, roles, and quotas before provisioning; document blocker |
+| Employee selector mistaken for secure identity | Unauthorized access if deployed with real data | Synthetic-only controlled demo; add server-side authentication and authorization before public/real-data use |
+| Hallucinated or unsupported policy answers | Incorrect onboarding guidance | Ground responses in retrieved sources; abstain/escalate when evidence is insufficient; evaluate against test set |
+| Weak retrieval | Irrelevant answers | Evaluate chunking, similarity threshold, top-k, and source coverage |
+| Secret exposure | Credential compromise | Use environment/secret stores; rotate exposed keys; enable scanning; avoid committing `.env` |
+| SQLite unsuitable for production scaling | Data reliability/performance concerns | Choose and test managed Azure persistence before production |
+| Time constraints | Incomplete deliverables | Prioritize secure demo path and document deferred items |
 
-## Dependencies
-OpenAI key + model names (Day 32); synthetic data (Day 32); Docker installed (Day 34); Azure subscription/role/region (Day 34).
+## 7. Decision Log
 
-## Blocker log
-| Date | Blocker | Who can resolve | Status |
-|---|---|---|---|
-| Day 31 | No Azure access yet | Trainer / lab admin | Open |
-| Day 31 | OpenAI key availability | Trainer / program admin | Open - confirm |
-
-## Decision log
-| Date | Decision | Reason |
+| When | Decision | Reason |
 |---|---|---|
-| Day 31 | FAISS instead of Pinecone | Local, no account |
-| Day 31 | SQLite for history, feedback, checklist | Zero setup |
-| Day 31 | Postpone login, upload page, analytics | Keep MVP achievable solo |
+| Day 31 | FAISS rather than Pinecone | Local, no additional account |
+| Day 31 | SQLite for prototype | Minimal setup |
+| Day 31 | Defer login, uploads, analytics in initial MVP | Control solo scope |
+| 20 Nov 2026 | Use synthetic demo employees EMP001–EMP003 | Enable employee-specific feature testing |
+| 20 Nov 2026 | Use employee selector without authentication **for controlled local demo only** | Capstone prototype constraint |
+| 20 Nov 2026 | Azure-only final cloud target; Groq temporary | Align implementation with capstone platform decision |
+| 20 Nov 2026 | Backend first, React second, Azure last | Incremental verification |
+
+## 8. Migration and Backup History
+
+- Existing database backup: `data/app_backup_20261120_113654.db`.
+- Migration 001: `backend/migrations/001_employee_schema.py`; tested on a temporary copy and for repeat execution; preserved original records.
+- Pre-seed backup: `data/app_pre_seed_20261120_115842.db`.
+- Migration 002: `backend/migrations/002_seed_demo_data.py`; seeded three employees, six leave balances, three IT assets, two payroll entries, and 45 checklist assignments; repeat execution checked for duplicates.
+- Subsequent local implementation includes employee-specific chat and ticket features; confirm exact migration filenames and checks in repository before final submission.
+
+## 9. Blocker Log
+
+| Blocker | Original status | Current action |
+|---|---|---|
+| Azure subscription/role/region availability | Open at Day 31 | Reconfirm before deployment; no successful deployment evidenced yet |
+| Azure OpenAI access/model deployments | Open at Day 31 | Confirm deployment names, quotas, and credentials; replace temporary Groq |
+| Production authentication/authorization | Deferred for local demo | Required before public deployment or real employee data |
+
+## 10. Next Immediate Step
+
+**Step 71 — Azure readiness audit:** inspect the current Docker configuration, environment-variable references, Azure integration points, and available Azure permissions **without provisioning or changing cloud resources**. Record the findings here before implementation.

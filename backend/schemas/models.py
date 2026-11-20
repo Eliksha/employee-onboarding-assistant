@@ -1,3 +1,4 @@
+
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -5,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class ChatRequest(BaseModel):
     question: str = Field(..., max_length=500)
+    employee_id: Optional[str] = None
 
     @field_validator("question")
     @classmethod
