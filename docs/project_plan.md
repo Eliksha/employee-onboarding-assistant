@@ -119,3 +119,11 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 ## 10. Next Immediate Step
 
 **Step 71 â€” Azure readiness audit:** inspect the current Docker configuration, environment-variable references, Azure integration points, and available Azure permissions **without provisioning or changing cloud resources**. Record the findings here before implementation.
+
+### PostgreSQL Dependency Update — 20 November 2026
+
+- Added `psycopg2-binary==2.9.13` to `requirements.txt`.
+- Verified that version 2.9.13 is installed in the local Python virtual environment.
+- Purpose: Ensure PostgreSQL connectivity dependencies are included in fresh installations and future deployment environments.
+- Existing application functionality and database records remain unchanged by this dependency update.
+

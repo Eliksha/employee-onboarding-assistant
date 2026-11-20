@@ -11,3 +11,4 @@ requests
 pytest
 httpx
 locust
+psycopg2-binary==2.9.13
