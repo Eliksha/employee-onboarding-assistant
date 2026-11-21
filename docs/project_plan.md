@@ -277,3 +277,32 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Employee list (EMP001-EMP003) is hard-coded in the frontend; selector is not authentication.
 - Chat history has no loading indicator (shows the empty-state prompt until history arrives); dashboard header shows the employee ID until the profile loads. Cosmetic, left unchanged.
 - E2E script lives outside the repository (scratch) and is not part of CI; mobile layout not tested.
+
+### Step 7 - Logging and Error Handling (Completed: 21 November 2026)
+
+**Status:** Completed. No API contract or frontend change; PostgreSQL, FAISS index and Azure untouched. Not yet committed.
+
+**Inspected:** `backend/logging_config.py`, `backend/middleware/__init__.py`, `backend/main.py`, all routes (`chat`, `employees`, `feedback`, `checklist`, `admin`), `services/llm.py`, `rag.py`, `orchestrator.py`, `employee_query_router.py`, `db.py`, `employee_db.py`, `postgres.py`, existing `logs/app.log` (secret scan only).
+
+**Verified before changes (probes with fake credentials, isolated SQLite):**
+- Groq 401 error text and psycopg2 connection/DSN errors do **not** contain the API key or password; existing `logs/app.log` (3,490 lines) had 0 key-like tokens and 0 "password" matches. No redaction filter added (no confirmed leak).
+- Database failures (employees, chat, history), retrieval `RuntimeError`, and unhandled errors already returned a generic JSON 500 with `request_id`, no stack trace; tracebacks were logged server-side. 404/405/422 already returned JSON string `detail`; chat logs only question length, not text.
+
+**Confirmed issues fixed:**
+1. A server-side `ValueError` inside the chat pipeline (e.g. retrieval/embedding failure, bad `DB_BACKEND`) was returned as **400 "Invalid employee or query."** and logged without traceback. Added `UnknownEmployeeError(ValueError)` in `employee_db.py` (raised in `db.py`, `orchestrator.py`, `employee_query_router.py`); `routes/chat.py` maps only that to the unchanged 400. Other errors now reach the middleware: safe 500 + logged traceback.
+2. Service-level log lines (LLM unavailable, guardrail rejection, chat answered) had no request ID. Added a `ContextVar` set by the middleware and a `RequestIdFilter`; log format is now `time | LEVEL | rid=<id> | message` (`rid=-` outside requests). Existing `request_id=` text in middleware lines kept for compatibility.
+3. Malformed JSON returned `Invalid input (1): JSON decode error` ("1" was a character offset). Now `Invalid input: request body is not valid JSON`.
+4. Each pytest run appended ~108 lines of synthetic traffic and deliberate tracebacks to the real `logs/app.log`. `tests/conftest.py` now sets `LOG_DIR` to a temporary directory (verified: real log line count unchanged after a run).
+
+**Tests:** new `tests/integration/test_error_handling.py` (16 tests: log directory isolation, `rid` format, request-ID correlation and reset, DB failure on employee/history/feedback, LLM 503, retrieval `RuntimeError`/`ValueError` -> 500, unknown employee still 400, invalid JSON/missing field/too long -> string 422, 404/405 JSON, no fake key/password/question text in logs including tracebacks).
+- `python -m pytest -q`: **74 passed** (58 existing + 16 new).
+- Frontend (unchanged, sanity run): `npm test` 4/4 passed; `npm run build` succeeded.
+- RAG evaluation not re-run (RAG path unchanged apart from log formatting).
+
+**Limitations:**
+- No secret-redaction filter: protection relies on not logging secrets and on library error texts verified above; a future dependency could change its messages.
+- Logs are plain text, not structured JSON; no Azure Monitor/Application Insights integration yet (Azure step).
+- Request paths with synthetic employee IDs (e.g. `/employees/EMP001`) are logged; acceptable for synthetic data, review before real data.
+- Uvicorn's own access log is configured separately and logs query strings (e.g. `?employee_id=`).
+- `POST /ingest` still rebuilds the FAISS index without authentication (known Step 1 security item, out of scope).
+- 503 responses carry the request ID only in the `X-Request-ID` header, not in the JSON body (500 has both).

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from backend.config import settings
+from backend.services.employee_db import UnknownEmployeeError
 from backend.services.postgres import postgres_connection
 
 
@@ -153,7 +154,7 @@ def save_employee_message(employee_id: str, question: str, answer: str, found: b
     with _conn() as c:
         employee = _execute(c, "SELECT 1 FROM employees WHERE employee_id = ?", (employee_id,), one=True)
         if employee is None:
-            raise ValueError("Unknown employee ID")
+            raise UnknownEmployeeError("Unknown employee ID")
         return _insert_id(c, """INSERT INTO messages
             (employee_id, question, answer, found, sources, created_at) VALUES (?, ?, ?, ?, ?, ?)""",
             (employee_id, question, answer, int(found), json.dumps(sources), _now()))
@@ -165,7 +166,7 @@ def recent_employee_messages(employee_id: str, limit: int = 20) -> List[Dict]:
     with _conn() as c:
         employee = _execute(c, "SELECT 1 FROM employees WHERE employee_id = ?", (employee_id,), one=True)
         if employee is None:
-            raise ValueError("Unknown employee ID")
+            raise UnknownEmployeeError("Unknown employee ID")
         rows = _execute(c, """SELECT * FROM messages WHERE employee_id = ?
             ORDER BY id DESC LIMIT ?""", (employee_id, limit), all_rows=True)
     return [_message_dict(row) for row in rows]

@@ -1,9 +1,12 @@
 import os
 import re
+import tempfile
 import zlib
 
 # Force SQLite before backend.config is imported, regardless of DB_BACKEND in .env.
 os.environ["DB_BACKEND"] = "sqlite"
+# Keep test traffic (including deliberate error tracebacks) out of the real logs/app.log.
+os.environ["LOG_DIR"] = tempfile.mkdtemp(prefix="onboardai-test-logs-")
 
 import numpy as np
 import pytest

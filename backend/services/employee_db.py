@@ -8,6 +8,10 @@ from backend.config import settings
 from backend.services.postgres import postgres_connection
 
 
+class UnknownEmployeeError(ValueError):
+    """The requested demo employee does not exist (a client error, unlike other ValueErrors)."""
+
+
 def _postgres() -> bool:
     backend = settings.db_backend.strip().lower()
     if backend not in {"sqlite", "postgresql"}:

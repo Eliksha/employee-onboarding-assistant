@@ -65,7 +65,7 @@ def execute_employee_query(
     employee = employee_db.get_employee(employee_id)
 
     if employee is None:
-        raise ValueError("Unknown employee ID")
+        raise employee_db.UnknownEmployeeError("Unknown employee ID")
 
     allowed_operations = {
         "leave_balances": employee_db.get_leave_balances,

@@ -1,11 +1,29 @@
 """Console + rotating file logging (logs/app.log). Safe to call more than once."""
 import logging
+from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
 
 from backend.config import settings
 
 LOGGER_NAME = "app"
-_FORMAT = "%(asctime)s | %(levelname)s | %(message)s"
+_FORMAT = "%(asctime)s | %(levelname)s | rid=%(request_id)s | %(message)s"
+
+# Set per request by the middleware; "-" outside a request (startup, scripts, tests).
+request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+
+
+class RequestIdFilter(logging.Filter):
+    """Stamp every record with the current request ID so service-level logs can be correlated."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "request_id"):
+            record.request_id = request_id_var.get()
+        return True
+
+
+def install_request_id_filter(logger: logging.Logger) -> None:
+    if not any(isinstance(f, RequestIdFilter) for f in logger.filters):
+        logger.addFilter(RequestIdFilter())
 
 
 def setup_logging() -> logging.Logger:
@@ -13,6 +31,7 @@ def setup_logging() -> logging.Logger:
     if getattr(logger, "_configured", False):
         return logger
     logger.setLevel(logging.INFO)
+    install_request_id_filter(logger)
     fmt = logging.Formatter(_FORMAT)
 
     console = logging.StreamHandler()

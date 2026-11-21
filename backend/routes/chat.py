@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.schemas.models import ChatRequest, ChatResponse
 from backend.services import db, llm, orchestrator
-from backend.services.employee_db import get_employee
+from backend.services.employee_db import UnknownEmployeeError, get_employee
 
 
 router = APIRouter()
@@ -45,7 +45,7 @@ def chat(req: ChatRequest):
             ),
         )
 
-    except ValueError as exc:
+    except UnknownEmployeeError as exc:
         logger.warning(
             "Chat request rejected: %s",
             str(exc)[:200],

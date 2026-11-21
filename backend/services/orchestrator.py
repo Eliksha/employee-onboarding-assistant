@@ -6,7 +6,7 @@ from backend.services.employee_query_router import (
     classify_employee_query,
     execute_employee_query,
 )
-from backend.services.employee_db import get_employee
+from backend.services.employee_db import UnknownEmployeeError, get_employee
 
 
 def _format_employee_answer(intent: str, data) -> str:
@@ -70,7 +70,7 @@ def answer_question(
 
     # Validate the selected demo employee before processing.
     if employee_id is not None and get_employee(employee_id) is None:
-        raise ValueError("Unknown employee ID")
+        raise UnknownEmployeeError("Unknown employee ID")
 
     intent = classify_employee_query(question)
 
