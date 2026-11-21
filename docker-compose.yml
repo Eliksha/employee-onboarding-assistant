@@ -1,0 +1,63 @@
+# Local Docker stack for OnboardAI (synthetic data). Not an Azure deployment.
+#
+#   $env:DOCKER_PG_PASSWORD = "<any local value>"     # password for the container-only database
+#   docker compose up -d --build
+#   open http://localhost:8080
+#
+# Secrets come from the environment / the git-ignored .env file; nothing is baked into images.
+# The container database is separate from any local PostgreSQL and is seeded from docker/postgres/.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: onboardai
+      POSTGRES_USER: onboardai
+      POSTGRES_PASSWORD: ${DOCKER_PG_PASSWORD:?Set DOCKER_PG_PASSWORD for the container database}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U onboardai -d onboardai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    # No published port: only reachable from the Docker network.
+
+  backend:
+    build: .
+    env_file:
+      - path: .env          # LLM / RAG settings (GROQ_API_KEY, MODEL_NAME, ...); optional
+        required: false
+    environment:
+      # Container database always overrides any local PG_* values from .env.
+      DB_BACKEND: postgresql
+      PG_HOST: db
+      PG_PORT: "5432"
+      PG_DATABASE: onboardai
+      PG_USER: onboardai
+      PG_PASSWORD: ${DOCKER_PG_PASSWORD:?Set DOCKER_PG_PASSWORD for the container database}
+      HF_HUB_OFFLINE: "1"   # embedding model is baked into the image
+    volumes:
+      - ./data/index:/app/data/index:ro   # existing FAISS index, never modified by the container
+      - logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  logs:

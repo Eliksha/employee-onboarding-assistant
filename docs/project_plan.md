@@ -306,3 +306,38 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Uvicorn's own access log is configured separately and logs query strings (e.g. `?employee_id=`).
 - `POST /ingest` still rebuilds the FAISS index without authentication (known Step 1 security item, out of scope).
 - 503 responses carry the request ID only in the `X-Request-ID` header, not in the JSON body (500 has both).
+
+### Step 8 - Docker Integration Testing (Completed: 21 November 2026)
+
+**Status:** Completed locally (Docker Engine 29.8.2, Compose v5.5.1). No Azure deployment. Not yet committed.
+
+**Finding:** the repository contained **no** Dockerfile, compose file or `.dockerignore`, and the **PostgreSQL schema/seed was not in the repository** (`db.init_db()` assumes a separately migrated database). A minimal, additive Docker setup was created; application code and API contracts are unchanged.
+
+**Files created/modified:**
+- `Dockerfile` (backend): Python 3.12-slim, non-root user, embedding model baked in (`HF_HUB_OFFLINE=1` at runtime), `/health` HEALTHCHECK.
+- `frontend/Dockerfile` + `frontend/nginx.conf` + `frontend/.dockerignore`: Vite build served by nginx; `/api/*` proxied to `backend:8000` with `/api` stripped (same as the Vite proxy, no CORS needed); Docker DNS re-resolution so a restarted backend is found again; SPA fallback.
+- `docker-compose.yml`: `db` (postgres:16-alpine, named volume, no published port, `pg_isready` health), `backend` (`.env` for LLM settings, container DB values override local `PG_*`, `DOCKER_PG_PASSWORD` required, FAISS index bind-mounted **read-only**, log volume), `frontend` (127.0.0.1:8080). `depends_on: service_healthy` and `restart: unless-stopped` on all services.
+- `docker/postgres/01_schema.sql`, `02_seed.sql`: read-only `pg_dump` of the local PostgreSQL (schema; data for the 6 synthetic reference tables only - no messages, tickets, feedback or escalations).
+- `.dockerignore`: excludes `.env*`, `.venv`, `data/index`, `data/*.db`, logs, tests, docs, frontend.
+- `.env.example`: `SIMILARITY_THRESHOLD` corrected 0.55 -> 0.65 (matches code and Step 5 guardrail tests); `DOCKER_PG_PASSWORD` documented.
+- `tests/unit/test_docker_config.py`: 6 static checks (build context excludes secrets, no hardcoded secrets, read-only index mount, health/restart policy, init SQL tables and synthetic-only seed, nginx proxy rule).
+
+**Results (isolated project `onboardai-step8`, random container DB password, volumes removed afterwards):**
+- Build: both images built in 2 min 54 s (backend 879 MB, frontend 74 MB). No `.env` or secrets in images or image history.
+- Startup: `docker compose up --wait` -> db, backend, frontend **healthy** in 52 s, in dependency order; init SQL executed once.
+- Container DB: 10 tables, 3 employees, 45 checklist assignments.
+- Integration through nginx (:8080): React app, assets and SPA fallback 200; 8 API GET endpoints 200; unknown employee 404; validation 422 string detail; Groq chat with RAG over the mounted FAISS index (`found=true`, cited section 2.1); unknown question fallback; employee-specific chat from PostgreSQL; ticket create and checklist update persisted; **18/18 checks**.
+- Browser E2E (Step 6 Playwright suite, headless Chrome against :8080): **16/16 passed**.
+- FAISS index: SHA-256 unchanged; `POST /ingest` fails with a safe 500 because the mount is read-only.
+- Restart/persistence: backend restart (nginx re-resolved), simulated crash (SIGTERM to PID 1 -> restart count 0 -> 1, healthy), full `down`/`up` with volumes kept (init SQL not re-run): ticket, checklist change and chat history persisted; **4/4 checks** after each.
+- Logs: log volume persisted (216 lines, 82 with `rid=`); 0 occurrences of the Groq key, container DB password, `gsk_`, "password", or chat question text; only tracebacks were the 2 deliberate `/ingest` attempts.
+- Regression: `pytest` **80 passed** (74 + 6); frontend `npm test` 4/4, `npm run build` OK.
+
+**Azure readiness (not implemented):** all settings come from environment variables (no endpoints or secrets in images). The LLM client is OpenAI-compatible with a configurable base URL, but variable names are Groq-specific (`GROQ_API_KEY`, `GROQ_BASE_URL`); Azure OpenAI will need either its OpenAI-compatible v1 endpoint via these variables or a small provider switch (API version, deployment name) plus Key Vault / managed identity. The `db` service would be replaced by Azure Database for PostgreSQL and the FAISS index shipped in the image or Azure storage.
+
+**Remaining issues / limitations:**
+- `requirements.txt` is unpinned (container resolved FastAPI 0.165.0 / openai 3.57.0 vs local 0.163.2 / 3.55.0) and includes dev/test tools (pytest, httpx, locust) -> larger, less reproducible image.
+- Container DB is seeded from a snapshot; the original PostgreSQL migrations remain outside the repository.
+- `POST /ingest` remains unauthenticated (blocked in Docker only by the read-only mount).
+- No HTTPS/TLS; ports bound to 127.0.0.1 for local use only.
+- Docker test scripts (integration and browser) live outside the repository and are not in CI.
