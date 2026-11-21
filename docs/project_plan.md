@@ -341,3 +341,21 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - `POST /ingest` remains unauthenticated (blocked in Docker only by the read-only mount).
 - No HTTPS/TLS; ports bound to 127.0.0.1 for local use only.
 - Docker test scripts (integration and browser) live outside the repository and are not in CI.
+
+### Step 9 - Documentation Finalization (Completed: 21 November 2026)
+
+**Status:** Completed. Documentation only; no application code, PostgreSQL data or FAISS index changed. Not yet committed.
+
+**Files updated:**
+- `README.md` - rewritten (was the Day 31 draft citing OpenAI/SQLite): purpose and data notice, status table, features, Mermaid architecture diagram, technology stack, repository layout, environment-variable table (from `backend/config.py`), local setup (SQLite and PostgreSQL options, index build), Docker Compose usage, RAG workflow and guardrails, all 16 API endpoints, test commands with verified results, logging/security notes, planned Azure OpenAI migration (explicitly not implemented), known limitations.
+- `docs/architecture.md` - replaced outdated Day 31 description with current component table, system and RAG decision-flow Mermaid diagrams, and local Docker deployment view; `architecture.png` labelled as superseded historical design.
+- `frontend/README.md` - added dev proxy note, `npm test` / `npm run build`, Docker/nginx summary.
+- `.env.example` - removed unused `BACKEND_URL` (no code reads it).
+
+**Verification:**
+- First-time setup verified in a throwaway clone of commit `0ef0717` (no `.env`): `init_db` + migrations 001-003 + `python -m backend.services.ingest` (48 chunks, identical to the existing index) + Uvicorn; `/health`, `/employees/EMP001`, checklist and history returned 200; `pytest` 80 passed. Finding documented: migration 003 needs `PYTHONPATH=.`.
+- Automated consistency check: all relative links and referenced paths exist; every documented environment variable exists in `Settings` or `docker-compose.yml`; documented endpoints match the OpenAPI schema exactly (16/16); referenced `python -m` modules and npm scripts exist; no emojis; no API key, password or `gsk_` token in the documents.
+- All 3 Mermaid diagrams rendered successfully with Mermaid 11.4.1 in headless Chrome.
+- Regression: `pytest` 80 passed; `npm test` 4 passed.
+
+**Remaining documentation gaps:** `docs/runbook.md` and `docs/demo_script.md` are still placeholders; `docs/test_questions.md` and `docs/test_report.md` reflect the Day 32 test set (superseded by `docs/rag_eval_report.md`); the PostgreSQL `psql -f` load path for a non-Docker database is documented but was only executed via Docker initialisation; no Azure deployment documentation can be written until Azure access exists.

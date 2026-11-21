@@ -31,7 +31,16 @@ From the frontend directory:
 npm install
 npm run dev
 
-Open http://localhost:5173.
+Open http://localhost:5173. The Vite dev server proxies `/api/*` to `http://127.0.0.1:8000` (see `vite.config.js`).
+
+### Test and Build
+
+npm test          # helper tests with the Node test runner
+npm run build     # production build in dist/
+
+### Docker
+
+`Dockerfile` builds the app and serves it with nginx; `nginx.conf` proxies `/api/*` to the `backend` service, matching the dev proxy. Start the full stack from the project root with Docker Compose (see the root README).
 
 ## Important Notes
 
