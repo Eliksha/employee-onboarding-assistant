@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { LayoutDashboard, Bot, ClipboardCheck, CalendarDays, Laptop, Headset, Sparkles, Menu, X, Send, RefreshCw, ArrowRight, UserRound, ShieldCheck } from 'lucide-react';
-import { employeeApi } from './api';
+import { LayoutDashboard, Bot, ClipboardCheck, CalendarDays, Laptop, Headset, Sparkles, Menu, X, Send, RefreshCw, ArrowRight, UserRound, ShieldCheck, LogOut, LoaderCircle } from 'lucide-react';
+import { authApi, employeeApi, setCsrfToken, setUnauthorizedHandler } from './api';
+import { SESSION_EXPIRED_NOTICE, SIGNED_OUT_NOTICE } from './auth';
+import LoginPage from './LoginPage';
 import { CHAT_MAX_LENGTH, formatSources } from './format';
 import './App.css';
 
-const EMPLOYEES = ['EMP001', 'EMP002', 'EMP003'];
 const NAV = [
   ['Dashboard', LayoutDashboard], ['AI Assistant', Bot], ['My Checklist', ClipboardCheck],
   ['Leave & Payroll', CalendarDays], ['My Assets', Laptop], ['Support Center', Headset],
@@ -211,8 +212,13 @@ function SupportCenter({ employeeId }) {
   </>;
 }
 
-function App() {
-  const [employeeId, setEmployeeId] = useState('EMP001');
+function SignOutButton({ onSignOut, signingOut }) {
+  return <button type="button" className="subtle-button logout-button" onClick={onSignOut} disabled={signingOut}><LogOut size={16}/>{signingOut ? 'Signing out...' : 'Sign out'}</button>;
+}
+
+// The employee is always the signed-in user's own employee (identity comes from the server session).
+function Workspace({ user, onSignOut, signingOut }) {
+  const employeeId = user.employee_id;
   const [page, setPage] = useState('Dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Results are stored with the request they belong to; stale/empty states are derived during render
@@ -242,13 +248,13 @@ function App() {
   }, [employeeId, pageTasks, requestKey]);
   const loading = requestKey !== null && recordsResult.requestKey !== requestKey;
   const records = loading ? {} : recordsResult.records;
-  const name = profile?.full_name ?? profile?.name ?? employeeId;
+  const name = profile?.full_name ?? profile?.name ?? user.name ?? employeeId;
   const panels = page === 'Leave & Payroll' ? [['leave', 'Leave Balances'], ['payroll', 'Payroll Calendar']] : page === 'My Checklist' ? [] : page === 'My Assets' ? [['assets', 'Assigned Assets']] : page === 'Support Center' ? [] : [];
   return <div className="app-shell">
     {sidebarOpen && <button className="overlay" aria-label="Close menu" onClick={() => setSidebarOpen(false)}/>}
     <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}><div className="brand"><div className="brand-icon"><Sparkles size={23}/></div><div><strong>OnboardAI</strong><small>NEW JOINER PLATFORM</small></div><button className="mobile-close" onClick={() => setSidebarOpen(false)} aria-label="Close menu"><X size={20}/></button></div><div className="nav-caption">WORKSPACE</div><nav>{NAV.map(([label, Icon]) => <button key={label} className={`nav-item ${page === label ? 'active' : ''}`} onClick={() => navigate(label)}><Icon size={19}/>{label}</button>)}</nav><div className="sidebar-footer"><ShieldCheck size={16}/> Synthetic-data demonstration</div></aside>
-    <div className="main-area"><header className="topbar"><div className="breadcrumb"><button className="menu-button" aria-label="Open menu" onClick={() => setSidebarOpen(true)}><Menu size={22}/></button><span>Workspace</span><span>/</span><strong>{page}</strong></div><div className="topbar-right"><span className="environment">LOCAL DEMO</span><div className="avatar">{name[0]}</div></div></header>
-    <main className="content"><div className="page-header"><div><div className="eyebrow">✦ YOUR ONBOARDING WORKSPACE</div><h1>{page === 'Dashboard' ? `Welcome, ${name.split(' ')[0]}!` : page}</h1><p>{page === 'Dashboard' ? 'Everything you need to get started, all in one place.' : 'Your employee-specific onboarding workspace.'}</p></div><label className="employee-selector"><span>VIEWING AS · DEMO ONLY</span><div><UserRound size={17}/><select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>{EMPLOYEES.map((id) => <option value={id} key={id}>{id}</option>)}</select></div></label></div>
+    <div className="main-area"><header className="topbar"><div className="breadcrumb"><button className="menu-button" aria-label="Open menu" onClick={() => setSidebarOpen(true)}><Menu size={22}/></button><span>Workspace</span><span>/</span><strong>{page}</strong></div><div className="topbar-right"><span className="environment">LOCAL DEMO</span><div className="avatar" title={user.email}>{name[0]}</div><SignOutButton onSignOut={onSignOut} signingOut={signingOut}/></div></header>
+    <main className="content"><div className="page-header"><div><div className="eyebrow">✦ YOUR ONBOARDING WORKSPACE</div><h1>{page === 'Dashboard' ? `Welcome, ${name.split(' ')[0]}!` : page}</h1><p>{page === 'Dashboard' ? 'Everything you need to get started, all in one place.' : 'Your employee-specific onboarding workspace.'}</p></div><div className="employee-selector identity-card"><span>SIGNED IN AS</span><div><UserRound size={17}/><strong>{name}</strong></div><small>{employeeId} · {user.email}</small></div></div>
     {profileError && <div className="error" role="alert">{profileError}</div>}
     {page === 'Dashboard' && <><section className="hero"><div className="hero-text"><span className="hero-tag"><Sparkles size={14}/> YOUR AI-POWERED ONBOARDING COMPANION</span><h2>A smoother start.<br/>A smarter journey.</h2><p>From first-day questions to HR support, OnboardAI helps you find your way.</p><button onClick={() => navigate('AI Assistant')}>Explore AI Assistant <ArrowRight size={17}/></button></div><div className="hero-art"><Sparkles size={88}/></div></section><h2 className="section-title">Your workspace</h2><p className="section-subtitle">Quick access to your onboarding essentials.</p><div className="action-grid">{NAV.slice(1).map(([label, Icon], index) => <button className="action-card" key={label} onClick={() => navigate(label)}><div className={`action-icon tone-${index}`}><Icon size={24}/></div><h3>{label}</h3><p>{label === 'AI Assistant' ? 'Ask questions about HR policies and your onboarding.' : `Explore your ${label.toLowerCase()} information.`}</p><ArrowRight size={18} className="action-arrow"/></button>)}</div><section className="panel profile-card"><div className="panel-heading"><h2>Employee snapshot</h2><span className="pill">{employeeId}</span></div>{profile ? <div className="detail-grid">{Object.entries(profile).filter(([, value]) => ['string', 'number'].includes(typeof value)).map(([key, value]) => <div key={key}><small>{pretty(key)}</small><strong>{display(value)}</strong></div>)}</div> : <p className="muted">Loading employee profile...</p>}</section></>}
     {page === 'AI Assistant' && <Chat key={employeeId} employeeId={employeeId}/>}
@@ -257,5 +263,51 @@ function App() {
     {page === 'Support Center' && <SupportCenter key={employeeId} employeeId={employeeId}/>}
     <footer className="footer"><span>OnboardAI · RAG-Powered New Joiner Support Platform</span><span>Azure target architecture · Local development demo</span></footer></main></div>
   </div>;
+}
+
+// Administrator accounts have no employee workspace; admin actions are API-only (for example POST /ingest).
+function AdminHome({ user, onSignOut, signingOut }) {
+  return <div className="admin-shell">
+    <header className="topbar"><div className="brand"><div className="brand-icon"><Sparkles size={23}/></div><div><strong>OnboardAI</strong><small>ADMINISTRATOR</small></div></div><div className="topbar-right"><span className="environment">LOCAL DEMO</span><SignOutButton onSignOut={onSignOut} signingOut={signingOut}/></div></header>
+    <main className="content"><section className="panel"><div className="panel-heading"><div><h2>Administrator account</h2><p>Signed in as {user.email}</p></div><span className="pill">ADMIN</span></div>
+      <p className="muted">This account is not linked to an employee, so there is no personal onboarding workspace. Administrative actions, such as rebuilding the knowledge-base index (POST /ingest), are available through the API with this session.</p></section></main>
+  </div>;
+}
+
+function App() {
+  const [auth, setAuth] = useState({ status: 'checking', user: null, notice: '' });
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    // Any 401 from a data request means the server-side session is gone: return to the login page.
+    setUnauthorizedHandler(() => {
+      setCsrfToken(null);
+      setAuth((current) => current.status === 'authenticated' ? { status: 'anonymous', user: null, notice: SESSION_EXPIRED_NOTICE } : current);
+    });
+    // Restore an existing session after a page refresh (the cookie is HttpOnly; only the server can read it).
+    authApi.me()
+      .then(({ data }) => { if (live) { setCsrfToken(data.csrf_token); setAuth({ status: 'authenticated', user: data.user, notice: '' }); } })
+      .catch(() => { if (live) setAuth({ status: 'anonymous', user: null, notice: '' }); });
+    return () => { live = false; setUnauthorizedHandler(null); };
+  }, []);
+
+  const signedIn = (data) => {
+    setCsrfToken(data.csrf_token);
+    setAuth({ status: 'authenticated', user: data.user, notice: '' });
+  };
+  const signOut = () => {
+    setSigningOut(true);
+    authApi.logout().catch(() => {}).finally(() => {
+      setCsrfToken(null);
+      setSigningOut(false);
+      setAuth({ status: 'anonymous', user: null, notice: SIGNED_OUT_NOTICE });
+    });
+  };
+
+  if (auth.status === 'checking') return <div className="auth-loading" role="status"><LoaderCircle size={22} className="spin"/> Checking your session...</div>;
+  if (auth.status !== 'authenticated') return <LoginPage onSignedIn={signedIn} notice={auth.notice}/>;
+  if (!auth.user.employee_id) return <AdminHome user={auth.user} onSignOut={signOut} signingOut={signingOut}/>;
+  return <Workspace key={auth.user.email} user={auth.user} onSignOut={signOut} signingOut={signingOut}/>;
 }
 export default App;

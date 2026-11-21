@@ -1,11 +1,18 @@
 
-"""Chat endpoints for handbook RAG and employee-specific queries."""
+"""Chat endpoints for handbook RAG and employee-specific queries.
+
+Authorization: the employee is always the signed-in user's own employee (from the session).
+A body/query `employee_id` is accepted for compatibility but must match the session (403 otherwise).
+"""
 
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.schemas.models import ChatRequest, ChatResponse
+from backend.security import assert_own_employee, csrf_protected, current_user
+from backend.services.auth import AuthUser
 from backend.services import db, llm, orchestrator
 from backend.services.employee_db import UnknownEmployeeError, get_employee
 
@@ -15,21 +22,26 @@ logger = logging.getLogger("app")
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
-    """Answer handbook or employee-specific questions."""
+def chat(req: ChatRequest, user: AuthUser = Depends(csrf_protected)):
+    """Answer handbook or employee-specific questions for the signed-in user."""
 
-    # Validate a selected demo employee, if provided.
-    if req.employee_id is not None:
-        if get_employee(req.employee_id) is None:
+    if user.employee_id is not None:
+        employee_id = assert_own_employee(user, req.employee_id)
+        if get_employee(employee_id) is None:
             raise HTTPException(
                 status_code=404,
                 detail="Employee not found.",
             )
+    elif req.employee_id is not None:
+        # Accounts without an employee workspace (admins) cannot act as an employee.
+        assert_own_employee(user, req.employee_id)
+    else:
+        employee_id = None
 
     try:
         result = orchestrator.answer_question(
             question=req.question,
-            employee_id=req.employee_id,
+            employee_id=employee_id,
         )
 
     except llm.LLMUnavailable as exc:
@@ -75,14 +87,16 @@ def chat(req: ChatRequest):
 
 @router.get("/history")
 def history(
-    employee_id: str = Query(
-        ...,
-        description="Selected fictional employee ID",
+    employee_id: Optional[str] = Query(
+        default=None,
+        description="Optional; must equal the signed-in employee (defaults to it)",
     ),
     limit: int = Query(default=20, ge=1, le=100),
+    user: AuthUser = Depends(current_user),
 ):
-    """Return chat history for the selected demo employee."""
+    """Return the signed-in employee's own chat history."""
 
+    employee_id = assert_own_employee(user, employee_id)
     if get_employee(employee_id) is None:
         raise HTTPException(
             status_code=404,

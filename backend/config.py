@@ -26,6 +26,18 @@ class Settings(BaseSettings):
     chunk_words: int = 350
     chunk_overlap_words: int = 40
 
+    # Authentication and sessions
+    app_env: str = "development"            # "production" blocks the dev account-provisioning CLI
+    session_cookie_name: str = "onboardai_session"
+    session_cookie_secure: str = "auto"     # auto | true | false ("auto" = Secure when the request is HTTPS)
+    session_ttl_minutes: int = 480          # absolute lifetime of a session
+    session_idle_minutes: int = 60          # inactivity timeout
+    trust_proxy_headers: bool = False       # honour X-Forwarded-For/-Proto (enable only behind a trusted proxy)
+    login_max_failures_per_email: int = 5
+    login_max_failures_per_ip: int = 20
+    login_window_seconds: int = 900
+    password_min_length: int = 12
+
     # File paths
     raw_dir: Path = ROOT / "data" / "raw"
     index_dir: Path = ROOT / "data" / "index"

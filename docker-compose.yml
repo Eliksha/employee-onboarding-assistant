@@ -5,7 +5,9 @@
 #   open http://localhost:8080
 #
 # Secrets come from the environment / the git-ignored .env file; nothing is baked into images.
-# The container database is separate from any local PostgreSQL and is seeded from docker/postgres/.
+# The container database is separate from any local PostgreSQL and is seeded from docker/postgres/
+# (schema, synthetic data, authentication tables). No login accounts are created automatically:
+#   docker compose exec backend python -m backend.manage_accounts set --email <email> --employee-id EMP001
 
 services:
   db:
@@ -39,6 +41,9 @@ services:
       PG_USER: onboardai
       PG_PASSWORD: ${DOCKER_PG_PASSWORD:?Set DOCKER_PG_PASSWORD for the container database}
       HF_HUB_OFFLINE: "1"   # embedding model is baked into the image
+      # The backend sits behind nginx: use its X-Forwarded-For / -Proto for login rate limiting and
+      # Secure cookies. SESSION_COOKIE_SECURE=auto sets Secure automatically once HTTPS terminates in front.
+      TRUST_PROXY_HEADERS: "true"
     volumes:
       - ./data/index:/app/data/index:ro   # existing FAISS index, never modified by the container
       - logs:/app/logs

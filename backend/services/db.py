@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from backend.config import settings
+from backend.services.auth_schema import AUTH_TABLES, SQLITE_DDL
 from backend.services.employee_db import UnknownEmployeeError
 from backend.services.postgres import postgres_connection
 
@@ -69,9 +70,16 @@ def _now() -> str:
 
 def init_db() -> None:
     if _postgres():
-        # PostgreSQL schema and seed data were migrated and verified separately.
+        # PostgreSQL schema and seed data are migrated explicitly (never altered implicitly at startup).
         with _conn() as con:
             _execute(con, "SELECT 1 FROM employees LIMIT 1", one=True)
+            present = _execute(con, """SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name IN ('user_accounts', 'user_sessions')""", all_rows=True)
+        if len(present) != len(AUTH_TABLES):
+            raise RuntimeError(
+                "Authentication tables are missing in PostgreSQL. Run: python backend/migrations/004_auth_tables.py "
+                "(with PYTHONPATH set to the project root)."
+            )
         return
     with _conn() as c:
         c.executescript("""
@@ -83,6 +91,7 @@ def init_db() -> None:
                 status TEXT, created_at TEXT);
             CREATE TABLE IF NOT EXISTS checklist(id INTEGER PRIMARY KEY, phase TEXT, task TEXT, done INTEGER);
         """)
+        c.executescript(SQLITE_DDL)
         if c.execute("SELECT COUNT(*) FROM checklist").fetchone()[0] == 0:
             seed = Path(settings.raw_dir) / "checklist.json"
             if seed.exists():
@@ -95,6 +104,13 @@ def save_message(question: str, answer: str, found: bool, sources: List[Dict]) -
     with _conn() as c:
         return _insert_id(c, "INSERT INTO messages(question, answer, found, sources, created_at) VALUES (?,?,?,?,?)",
                           (question, answer, int(found), json.dumps(sources), _now()))
+
+
+def get_message_owner(message_id: int) -> tuple[bool, Optional[str]]:
+    """Return (exists, employee_id) for a chat message; employee_id is None for legacy/global messages."""
+    with _conn() as c:
+        row = _execute(c, "SELECT employee_id FROM messages WHERE id = ?", (message_id,), one=True)
+    return (row is not None, row["employee_id"] if row is not None else None)
 
 
 def message_exists(message_id: int) -> bool:

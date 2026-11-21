@@ -415,3 +415,34 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Behaviour note: the leave/payroll/assets pages now show "Loading records..." from the first render instead of briefly showing the empty-table message.
 
 **Remaining:** no React component test framework in the project (no new dependency added), so the refactor is covered by browser checks that live outside the repository rather than by unit tests.
+
+### Local Improvement 2 - Email and Password Authentication (Completed: 21 November 2026)
+
+**Status:** Completed and verified locally. Replaces the unrestricted employee selector with sign-in; every endpoint except `GET /health` and `POST /auth/login` now requires a session. No Azure, Entra ID, OAuth or LLM-provider changes. Real PostgreSQL, `data/app.db` and the FAISS index untouched. Not yet committed.
+
+**Design:**
+- Passwords: Argon2id via `argon2-cffi==25.1.0` (new, pinned dependency), library defaults t=3, m=64 MiB, p=4; minimum 12 characters; unknown emails verified against a dummy hash (no timing oracle); generic "Invalid email or password.".
+- Sessions: server-side table `user_sessions`; 256-bit random token in cookie `onboardai_session` (HttpOnly, SameSite=Strict, Path=/, Secure automatically on HTTPS); only SHA-256 of the token stored; absolute TTL 8 h, idle timeout 60 min; new session on every login; logout deletes the row; password change or account disable revokes all sessions.
+- CSRF: per-session random token returned by `/auth/login` and `/auth/me`, kept in browser memory, required as `X-CSRF-Token` on all authenticated POST/PATCH; login accepts JSON only.
+- Rate limiting: in-process sliding window, 5 failures per email and 20 per client IP per 15 min -> 429 with `Retry-After`; `X-Forwarded-For` honoured only with `TRUST_PROXY_HEADERS=true` (set in Docker behind nginx).
+- Authorization: identity from the session only; `/employees/{id}/...`, `/history`, `/chat` accept an employee ID only if it equals the session's (403 otherwise, also for unknown IDs); feedback only on own messages; legacy `/checklist` and `POST /ingest` admin-only; payroll calendar for any signed-in user.
+- Accounts: `user_accounts` (email unique, Argon2 hash, employee_id unique FK, role employee/admin, active flag). No accounts are seeded; `python -m backend.manage_accounts` (dev-only, refuses `APP_ENV=production`) provisions them with hidden-prompt or named-env-var passwords.
+- Schema: `backend/services/auth_schema.py` (single source), migration `backend/migrations/004_auth_tables.py` (additive, idempotent, PostgreSQL + SQLite), `docker/postgres/03_auth_schema.sql` for fresh Docker volumes; SQLite `init_db` creates the tables; PostgreSQL startup fails with a clear message if they are missing (never altered implicitly).
+- Frontend: new login page (email, password with show/hide, loading state, generic errors, notices), session restore via `/auth/me` on refresh, automatic return to login on any 401, Sign out button, employee dropdown replaced by a read-only "Signed in as" card; admin accounts see an administrator page. No tokens in localStorage/sessionStorage.
+
+**Files:** new `backend/services/auth.py`, `backend/services/auth_schema.py`, `backend/security.py`, `backend/routes/auth.py`, `backend/manage_accounts.py`, `backend/migrations/004_auth_tables.py`, `docker/postgres/03_auth_schema.sql`, `frontend/src/LoginPage.jsx`, `frontend/src/auth.js`, `frontend/src/auth.test.js`, `tests/integration/test_auth.py`; modified `backend/config.py`, `backend/main.py`, `backend/routes/{employees,chat,feedback,checklist,admin}.py`, `backend/services/db.py`, `frontend/src/{App.jsx,App.css,api.js}`, `docker-compose.yml`, `requirements.txt`, `.env.example`, tests (`conftest.py`, `test_api.py`, `test_error_handling.py`, `test_frontend_contract.py`, `test_middleware.py`, `test_docker_config.py`), docs (`README.md`, `docs/architecture.md`, `docs/runbook.md`, `docs/demo_script.md`).
+
+**Verification (all executed 21 Nov 2026):**
+
+| Check | Result |
+|---|---|
+| `python -m pytest -q` | **145 passed** (61 new in `test_auth.py`; existing tests now sign in through the real endpoint - no security bypass) |
+| `npm run lint` / `npm test` / `npm run build` | 0 problems / 7 passed (3 new) / succeeded |
+| Browser (headless Chrome), Docker stack via nginx | 13/13: login page, show/hide, generic errors, sign-in loading + own dashboard, HttpOnly/SameSite cookie not readable by JS, empty local/session storage, refresh persistence, workflows, RAG chat with citation + history, CSRF header on all writes, cross-employee 403 from the page, expired session -> login notice, sign out |
+| Browser, Vite dev server + local backend (scratch SQLite copy) | 13/13 (same suite) |
+| Docker fresh install (`onboardai-auth`, disposable volumes) | All services healthy; `03_auth_schema.sql` executed; 12 tables; 0 accounts until provisioned; stored hashes `$argon2id$v=19$m=65536,t=3,p=4` |
+| Docker API checks via nginx | 20/20 (401 unauthenticated, identical errors, cookie flags, own 200 / cross 403 reads and writes, CSRF, live Groq RAG after sign-in, history, feedback, ingest roles, logout + cookie replay 401, rate limit 429, other account unaffected) |
+| Docker persistence | Sessions, accounts and CSRF token valid after backend restart and after full down/up (3/3 each); init SQL not re-run |
+| Log scans (Docker volume + console) | 0 occurrences of passwords, session token, CSRF token or employee emails; login events use email fingerprints |
+
+**Known limitations:** no MFA, password reset, self-service password change or external identity provider (Entra ID out of scope); rate limiter is in-memory per process (resets on restart, not shared across workers) and a known email can be locked for up to 15 minutes by failed attempts; in Docker the backend port 8000 is also published on localhost while `X-Forwarded-For` is trusted (per-IP limit bypassable locally; per-email limit still applies); HTTPS not configured locally, so `Secure` cookies apply only once HTTPS is in place; API docs (`/docs`) remain public (they expose no data without a session); admin actions are API-only; the real local PostgreSQL needs migration 004 and account provisioning before the backend will start against it (not run, by rule).

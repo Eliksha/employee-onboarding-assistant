@@ -6,18 +6,23 @@ Every question below was run during Step 10 (21 November 2026) - against the loc
 
 1. Docker Desktop running; `.env` contains a working `GROQ_API_KEY`; FAISS index present in `data/index`.
 2. `$env:DOCKER_PG_PASSWORD = "<local value>"` then `docker compose up -d --build --wait`.
-3. `docker compose ps` shows three healthy services; open http://localhost:8080.
-4. Optional clean slate: `docker compose down -v` before step 2 (removes earlier demo tickets and chat history).
-5. Fallback if the LLM is unavailable: employee pages, checklist, tickets and personal questions still work; policy questions return a clear 503 message.
+3. `docker compose ps` shows three healthy services.
+4. Provision demo accounts once (hidden password prompts; keep the passwords private):
+   `docker compose exec backend python -m backend.manage_accounts set --email aarav.sharma@example.com --employee-id EMP001`
+   and the same for `meera.iyer@example.com` / `EMP002`. Open http://localhost:8080.
+5. Optional clean slate: `docker compose down -v` before step 2 (removes earlier demo tickets, chat history and accounts).
+6. Fallback if the LLM is unavailable: employee pages, checklist, tickets and personal questions still work; policy questions return a clear 503 message.
 
 ## 1. Problem and solution (1 minute)
 
 New joiners repeatedly ask HR and IT the same policy questions. OnboardAI answers from the approved handbook only, shows its source, declines when the answer is not documented, and gives each employee a personal onboarding workspace. All data is synthetic (fictional company NovaTech Solutions).
 
-## 2. Dashboard and employee context (1 minute)
+## 2. Secure sign-in and dashboard (1.5 minutes)
 
-- Show the **Dashboard**: welcome message and employee snapshot for EMP001 (Aarav Sharma).
-- Switch the selector to **EMP002** (Meera Iyer), then back. Point out "VIEWING AS - DEMO ONLY": this is a demo selector, not authentication.
+- Show the **login page**. Enter a wrong password: the error is the generic "Invalid email or password." (the same for unknown emails). Use the eye icon to show/hide the password.
+- Sign in as **aarav.sharma@example.com**: the dashboard opens for EMP001 (Aarav Sharma); the "Signed in as" card replaces the old employee dropdown - there is no way to switch to someone else's data.
+- Refresh the page: still signed in (server-side session in an HttpOnly cookie; nothing in browser storage).
+- Talking point: passwords are Argon2id hashes, sessions expire after 8 h or 60 min idle, writes need a CSRF token, failed logins are rate-limited, and the API returns 403 for any other employee's records.
 
 ## 3. AI Assistant - grounded answers with citations (3 minutes)
 
@@ -47,12 +52,17 @@ Show the Mermaid diagram in the README and summarise:
 
 - React/nginx, FastAPI, PostgreSQL, FAISS with local fastembed embeddings, LLM via an OpenAI-compatible client (Groq temporarily; Azure OpenAI planned).
 - Guardrails: retrieval gate, untrusted-context prompt, `NOT_FOUND`, output validation (citations, numbers, emails, secret leakage), cited-only sources.
-- Evidence: 80 backend tests, 4 frontend tests, RAG evaluation 50/50, 16/16 browser checks, Docker health, restart and persistence checks (see `docs/final_local_test_report.md`).
+- Evidence: 145 backend tests (61 for authentication and authorization), 7 frontend tests, RAG evaluation 50/50, browser and Docker checks (see `docs/project_plan.md` and `docs/final_local_test_report.md`).
 
-## 6. Honest limitations and next steps (1 minute)
+## 6. Sign out (30 seconds)
+
+- Click **Sign out**: back to the login page with "You have signed out."; the server-side session is deleted, so the old cookie no longer works.
+- Optional: sign in as **meera.iyer@example.com** to show a different employee's workspace.
+
+## 7. Honest limitations and next steps (1 minute)
 
 - Groq is temporary; Azure OpenAI and Azure hosting are not implemented yet (pending access).
-- No authentication; synthetic data only.
+- Local email/password accounts only (no MFA, password reset or external identity provider); synthetic data only.
 - Known retrieval gaps (for example "Is there a cab if I work late?" is not answered although the handbook covers it).
 - Next: Azure OpenAI migration, managed PostgreSQL, Entra ID authentication, CI/CD.
 

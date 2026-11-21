@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from backend import middleware
 from backend.logging_config import setup_logging
-from backend.routes import admin, chat, checklist, employees, feedback
+from backend.routes import admin, auth, chat, checklist, employees, feedback
 from backend.services import db
 
 
@@ -18,6 +18,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Employee Onboarding Assistant", lifespan=lifespan)
 middleware.install(app)
 
+app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(checklist.router)
 app.include_router(feedback.router)

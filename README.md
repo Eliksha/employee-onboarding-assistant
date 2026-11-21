@@ -1,10 +1,10 @@
 # OnboardAI: RAG-Powered New Joiner Support Platform
 
-OnboardAI helps new employees find onboarding information (leave, payroll, benefits, IT setup, HR policies) without waiting for HR or IT. It answers policy questions from an approved handbook using retrieval-augmented generation (RAG), cites its sources, refuses to guess when the handbook does not contain the answer, and gives each demo employee a personal workspace for leave balances, assets, an onboarding checklist and support tickets.
+OnboardAI helps new employees find onboarding information (leave, payroll, benefits, IT setup, HR policies) without waiting for HR or IT. It answers policy questions from an approved handbook using retrieval-augmented generation (RAG), cites its sources, refuses to guess when the handbook does not contain the answer, and gives each signed-in employee a private workspace for leave balances, assets, an onboarding checklist and support tickets.
 
 EY GDS capstone project - Domain: Generative AI for Human Resources.
 
-> **Data notice:** all content is synthetic. The handbook describes a fictional company (NovaTech Solutions) and the three demo employees (EMP001-EMP003) are fictional. The employee selector is **not** authentication; do not use this build with real employee data.
+> **Data notice:** all content is synthetic. The handbook describes a fictional company (NovaTech Solutions) and the three demo employees (EMP001-EMP003) are fictional. Local email/password authentication protects the demo, but this build has not been security-assessed for real employee data.
 
 ## Project status
 
@@ -16,7 +16,8 @@ EY GDS capstone project - Domain: Generative AI for Human Resources.
 | Docker Compose (frontend + backend + PostgreSQL) | Implemented and verified locally |
 | LLM provider | **Groq (temporary, development only)** |
 | Azure (Azure OpenAI, hosting, identity) | **Not started** - planned final platform, pending Azure access |
-| Authentication / authorization | Not implemented (demo selector only) |
+| Authentication / authorization | Email + password (Argon2id), server-side sessions, CSRF protection, per-employee authorization, admin role - implemented and tested locally |
+| External identity (Microsoft Entra ID / OAuth) | Not implemented (out of scope for now) |
 
 Detailed progress, decisions and test evidence: [docs/project_plan.md](docs/project_plan.md).
 
@@ -24,7 +25,8 @@ Detailed progress, decisions and test evidence: [docs/project_plan.md](docs/proj
 
 - **AI Assistant** - answers handbook questions with citations (for example `[Handbook 2.1]`), shows only the sources the answer actually cites, and returns a safe fallback with HR/IT contacts when the answer is not in the handbook.
 - **Employee-specific answers** - questions such as "What is my leave balance?" are routed to approved database queries (no LLM involved).
-- **Chat history** per demo employee.
+- **Secure sign-in** - email and password; each employee sees only their own data; sign out from any page.
+- **Chat history** per employee.
 - **Onboarding checklist** - 15 tasks per employee; completion is saved.
 - **Leave & Payroll** - leave balances and the payroll calendar.
 - **My Assets** - assigned IT equipment.
@@ -44,6 +46,8 @@ flowchart LR
     rag --> guard["Guardrails<br/>retrieval gate, output validation"]
     guard --> llm["LLM API<br/>Groq (temporary)<br/>Azure OpenAI (planned)"]
     api -->|"chat history, tickets, checklist"| edb
+    fe -->|"POST /api/auth/login"| authn["Auth: Argon2id passwords,<br/>server-side sessions, CSRF,<br/>login rate limiting"]
+    authn --> edb
     raw["data/raw<br/>handbook.md, faqs.md"] -->|"python -m backend.services.ingest"| idx
 ```
 
@@ -99,6 +103,12 @@ Copy-Item .env.example .env
 | `INDEX_DIR`, `RAW_DIR`, `LOG_DIR` | `data/index`, `data/raw`, `logs` | File locations |
 | `DOCKER_PG_PASSWORD` | none (required) | Docker Compose only: password of the container database |
 | `BACKEND_PORT`, `FRONTEND_PORT` | `8000`, `8080` | Docker Compose host ports (bound to 127.0.0.1) |
+| `APP_ENV` | `development` | `production` disables the development account-provisioning tool |
+| `SESSION_TTL_MINUTES` / `SESSION_IDLE_MINUTES` | `480` / `60` | Absolute session lifetime / inactivity timeout |
+| `SESSION_COOKIE_SECURE` | `auto` | `auto` sets the cookie `Secure` flag for HTTPS requests; `true` forces it |
+| `TRUST_PROXY_HEADERS` | `false` | Use `X-Forwarded-For/-Proto` (only behind a trusted proxy; Docker Compose sets `true`) |
+| `LOGIN_MAX_FAILURES_PER_EMAIL` / `LOGIN_MAX_FAILURES_PER_IP` / `LOGIN_WINDOW_SECONDS` | `5` / `20` / `900` | Login rate limiting |
+| `PASSWORD_MIN_LENGTH` | `12` | Minimum password length for provisioned accounts |
 
 ## Local development (Windows PowerShell)
 
@@ -122,9 +132,12 @@ python -c "from backend.services import db; db.init_db()"
 python backend/migrations/001_employee_schema.py
 python backend/migrations/002_seed_demo_data.py
 $env:PYTHONPATH = "."; python backend/migrations/003_employee_chat_history.py
+python backend/migrations/004_auth_tables.py
 ```
 
-**Option B - PostgreSQL 16.** Create an empty database (for example `onboardai`), set `DB_BACKEND=postgresql` and the `PG_*` values in `.env`, and load the schema and synthetic seed with `psql -f docker/postgres/01_schema.sql` followed by `psql -f docker/postgres/02_seed.sql`. These are the same files Docker uses to initialise its database.
+**Option B - PostgreSQL 16.** Create an empty database (for example `onboardai`), set `DB_BACKEND=postgresql` and the `PG_*` values in `.env`, and load the schema and synthetic seed with `psql -f docker/postgres/01_schema.sql` followed by `psql -f docker/postgres/02_seed.sql`. Then load `docker/postgres/03_auth_schema.sql`. These are the same files Docker uses to initialise its database. For an **existing** PostgreSQL database, add only the authentication tables (additive and idempotent; no existing data is changed): `$env:PYTHONPATH = "."; python backend/migrations/004_auth_tables.py`. The backend refuses to start against PostgreSQL until these tables exist.
+
+**Accounts.** Create sign-in accounts for the synthetic employees (see [Authentication and authorization](#authentication-and-authorization)).
 
 ### 3. Knowledge-base index
 
@@ -164,7 +177,14 @@ docker compose up -d --build --wait
 docker compose ps
 ```
 
-Open http://localhost:8080 (API also on http://127.0.0.1:8000).
+Create accounts in the container database (passwords are entered at a hidden prompt; nothing is created automatically):
+
+```powershell
+docker compose exec backend python -m backend.manage_accounts set --email aarav.sharma@example.com --employee-id EMP001
+docker compose exec backend python -m backend.manage_accounts list
+```
+
+Open http://localhost:8080 and sign in (API also on http://127.0.0.1:8000).
 
 | Task | Command |
 |---|---|
@@ -188,46 +208,82 @@ Notes:
 6. **Output validation** (`guardrails.py`): the answer is rejected (fallback returned) if it contains secrets or system-prompt text, has no citation, cites a section that was not retrieved, or states numbers or email addresses absent from the retrieved passages.
 7. **Response**: `{message_id, answer, sources, found}`, where `sources` lists only the cited passages; the exchange is stored in chat history.
 
+## Authentication and authorization
+
+**Sign-in.** Employees sign in with their work email and password (`POST /auth/login`). Errors are always the generic "Invalid email or password." whether the email exists or not, and unknown emails still go through an Argon2 verification so timing does not reveal accounts. There is no self-registration or password reset; an administrator provisions accounts.
+
+**Passwords.** Stored only as Argon2id hashes (argon2-cffi defaults: time cost 3, 64 MiB, parallelism 4). Minimum length 12. Never logged, never accepted as command-line arguments.
+
+**Sessions.** A successful login always creates a new server-side session (preventing session fixation). The browser receives a 256-bit random identifier in the `onboardai_session` cookie: `HttpOnly`, `SameSite=Strict`, `Path=/`, and `Secure` automatically on HTTPS (`SESSION_COOKIE_SECURE=auto`). The database stores only a SHA-256 hash of the identifier. Sessions end after 8 hours (absolute) or 60 minutes of inactivity; `POST /auth/logout` deletes the server-side session; changing an account's password or disabling it ends all of its sessions. Nothing is stored in `localStorage` or `sessionStorage`.
+
+**CSRF.** Each session has a random CSRF token, returned by `/auth/login` and `/auth/me` and kept in browser memory. Every authenticated `POST`/`PATCH` must send it in the `X-CSRF-Token` header (403 otherwise). Login itself only accepts `application/json`.
+
+**Brute-force protection.** Failed logins are counted per email (5) and per client IP (20) in a 15-minute sliding window; further attempts get `429` with `Retry-After`, even with the correct password.
+
+**Authorization.** The employee is always taken from the session. Employee IDs in URLs, query strings or bodies are accepted only if they match it (403 otherwise, including unknown IDs, so other employees cannot be enumerated).
+
+| Role | Can access |
+|---|---|
+| `employee` (linked to one employee ID) | Own profile, leave, assets, checklist (read/update), tickets (read/create), chat and history, feedback on own messages, escalation, payroll calendar |
+| `admin` (may have no employee) | `POST /ingest`, legacy `/checklist`, payroll calendar, handbook chat; no employee data unless linked to an employee |
+
+**Provisioning (development only).** Accounts for the synthetic employees are created with a CLI that reads the password from a hidden prompt or a named environment variable, is idempotent, and refuses to run when `APP_ENV=production`:
+
+```powershell
+python -m backend.manage_accounts set --email aarav.sharma@example.com --employee-id EMP001
+python -m backend.manage_accounts set --email meera.iyer@example.com --employee-id EMP002
+python -m backend.manage_accounts set --email rohan.verma@example.com --employee-id EMP003
+python -m backend.manage_accounts set --email admin@novatech.example --role admin
+python -m backend.manage_accounts list          # emails, roles, links - never hashes
+python -m backend.manage_accounts disable --email aarav.sharma@example.com
+```
+
+For scripted use, set `$env:ONBOARDAI_NEW_PASSWORD = "<value>"` and add `--password-env ONBOARDAI_NEW_PASSWORD`. Choose a unique password per account; no passwords are stored in the repository.
+
 ## API endpoints
 
-All endpoints return JSON; errors use `{"detail": "<message>"}`. Every response carries an `X-Request-ID` header.
+All endpoints return JSON; errors use `{"detail": "<message>"}`. Every response carries an `X-Request-ID` header. Access: **Public** = no session; **Session** = signed in; **Own** = the signed-in employee's own records only; **CSRF** = `X-CSRF-Token` header required.
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | Liveness check |
-| POST | `/chat` | Ask a question (`question` max 500 chars, optional `employee_id`) |
-| GET | `/history?employee_id=` | Employee chat history (`limit` 1-100) |
-| GET | `/employees/{employee_id}` | Profile |
-| GET | `/employees/{employee_id}/leave-balances` | Leave balances |
-| GET | `/employees/{employee_id}/assets` | Assigned assets |
-| GET | `/employees/{employee_id}/checklist` | Onboarding checklist |
-| PATCH | `/employees/{employee_id}/checklist/{item_id}` | Mark a task done / not done |
-| GET | `/employees/{employee_id}/tickets` | Support tickets |
-| POST | `/employees/{employee_id}/tickets` | Create a ticket |
-| GET | `/employees/payroll/calendar` | Payroll calendar |
-| GET | `/checklist`, PATCH `/checklist/{item_id}` | Legacy shared checklist |
-| POST | `/feedback`, `/escalate` | Answer feedback; simulated HR/IT escalation |
-| POST | `/ingest` | Rebuild the FAISS index (**unauthenticated - do not expose**) |
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| GET | `/health` | Public | Liveness check |
+| POST | `/auth/login` | Public, rate-limited | Sign in (`email`, `password`); sets the session cookie |
+| GET | `/auth/me` | Session | Current user and CSRF token (restores the session after a refresh) |
+| POST | `/auth/logout` | Session + CSRF | Sign out (server-side session deleted) |
+| POST | `/chat` | Session + CSRF | Ask a question (`question` max 500 chars; optional `employee_id` must be your own) |
+| GET | `/history` | Own | Your chat history (`employee_id` optional and must be your own; `limit` 1-100) |
+| GET | `/employees/{employee_id}` | Own | Profile |
+| GET | `/employees/{employee_id}/leave-balances` | Own | Leave balances |
+| GET | `/employees/{employee_id}/assets` | Own | Assigned assets |
+| GET | `/employees/{employee_id}/checklist` | Own | Onboarding checklist |
+| PATCH | `/employees/{employee_id}/checklist/{item_id}` | Own + CSRF | Mark a task done / not done |
+| GET | `/employees/{employee_id}/tickets` | Own | Support tickets |
+| POST | `/employees/{employee_id}/tickets` | Own + CSRF | Create a ticket |
+| GET | `/employees/payroll/calendar` | Session | Company payroll calendar |
+| GET, PATCH | `/checklist`, `/checklist/{item_id}` | Admin (+ CSRF for PATCH) | Legacy shared checklist |
+| POST | `/feedback` | Session + CSRF | Rate an answer (own messages only) |
+| POST | `/escalate` | Session + CSRF | Simulated HR/IT escalation |
+| POST | `/ingest` | Admin + CSRF | Rebuild the FAISS index |
 
-Error behaviour: invalid input returns 422 with a readable message, unknown employees 404, LLM outage 503, and unexpected failures a generic 500 with a `request_id` (stack traces are logged server-side only, never returned).
+Error behaviour: 401 without a valid session; 403 for another employee's data, a missing or invalid CSRF token, or a missing role; 429 for too many failed logins; 422 with a readable message for invalid input; 503 for an LLM outage; and a generic 500 with a `request_id` for unexpected failures (stack traces are logged server-side only).
 
 ## Testing
 
 | Command | What it covers | Latest verified result |
 |---|---|---|
-| `python -m pytest -q` | Unit and integration tests (RAG, guardrails, API, error handling, logging, frontend contract, Docker config). Always uses a temporary SQLite database; PostgreSQL connections are blocked in tests. | **80 passed** (21 Nov 2026) |
-| `cd frontend; npm test` | Frontend helper tests (Node test runner) | **4 passed** |
+| `python -m pytest -q` | Unit and integration tests (RAG, guardrails, API, error handling, logging, frontend contract, Docker config). Always uses a temporary SQLite database; PostgreSQL connections are blocked in tests. | **145 passed** (21 Nov 2026), including 61 authentication/authorization tests |
+| `cd frontend; npm test` | Frontend helper tests (Node test runner) | **7 passed** |
 | `cd frontend; npm run lint` | ESLint (React hooks rules) | **0 errors, 0 warnings** |
 | `cd frontend; npm run build` | Production build | Succeeded |
 | `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs `GROQ_API_KEY`, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (20 Nov 2026, live Groq) |
 
-Additional checks performed during development (scripts not in the repository): browser end-to-end tests in headless Chrome (16/16 against both the Vite dev server and the Docker stack), Docker integration, restart and persistence checks (18/18 and 4/4), workflow and failure-case sweeps. Step 10 re-ran all of them on 21 Nov 2026, including a live RAG evaluation (50/50). See [docs/final_local_test_report.md](docs/final_local_test_report.md).
+Additional checks performed during development (scripts not in the repository): browser end-to-end tests in headless Chrome (16/16 against both the Vite dev server and the Docker stack), Docker integration, restart and persistence checks (18/18 and 4/4), workflow and failure-case sweeps. Step 10 re-ran all of them on 21 Nov 2026, including a live RAG evaluation (50/50). See [docs/final_local_test_report.md](docs/final_local_test_report.md). After authentication was added (21 Nov 2026): browser sign-in/workspace checks 13/13 on both the Docker stack and the Vite dev server, Docker auth checks through nginx 20/20 (including live Groq chat after sign-in), and sessions/accounts persisted across backend restart and full down/up (3/3 each).
 
 ## Logging and security notes
 
-- Logs go to the console and `logs/app.log` (rotating), formatted `time | LEVEL | rid=<request id> | message`. Question text, API keys and passwords are not logged.
+- Logs go to the console and `logs/app.log` (rotating), formatted `time | LEVEL | rid=<request id> | message`. Question text, API keys, passwords, session identifiers and CSRF tokens are not logged; failed logins are logged with a short one-way fingerprint of the email, not the email itself.
 - Secrets are supplied only through `.env` or environment variables; `.env` is excluded from git and Docker build contexts.
-- No authentication or authorization; `POST /ingest` is open. Suitable for a controlled local demo with synthetic data only.
+- Every endpoint except `/health` and `/auth/login` requires a session; employees can only reach their own records; `POST /ingest` requires the admin role. See [Authentication and authorization](#authentication-and-authorization).
 
 ## Planned migration to Azure OpenAI (not implemented)
 
@@ -237,12 +293,13 @@ Groq is used temporarily because Azure access is not yet available. The planned 
 2. Point the existing OpenAI-compatible client to Azure: either use Azure OpenAI's OpenAI-compatible endpoint through the existing base URL / key / model settings, or add a small provider switch in `backend/services/llm.py` for the Azure endpoint, API version and deployment name. Rename the Groq-specific variables accordingly.
 3. Store keys in Azure Key Vault or use managed identity instead of `.env`.
 4. Re-run `python -m pytest -q` and `python -m scripts.rag_eval`; re-validate `SIMILARITY_THRESHOLD`, `BORDERLINE_MARGIN` and `NOT_FOUND` behaviour with the new model.
-5. Decide hosting, managed PostgreSQL, identity (for example Microsoft Entra ID) and protection of `/ingest` before any non-local deployment.
+5. Decide hosting, managed PostgreSQL and HTTPS before any non-local deployment; decide later whether to keep local accounts or move to an external identity provider (for example Microsoft Entra ID).
 
 ## Known limitations
 
 - Groq is a temporary provider; no Azure resources exist yet.
-- No authentication or authorization; employee selection is a demo control only.
+- Authentication is local email/password only: no MFA, no password reset or self-service password change, no external identity provider, no admin UI (admin actions are API-only).
+- Login rate limiting is held in process memory: it resets on restart and is not shared across multiple backend processes; a locked email blocks that account for up to 15 minutes (possible nuisance lockout). In Docker the backend port 8000 is also published on localhost while `X-Forwarded-For` is trusted, so a local client could bypass the per-IP limit (the per-email limit still applies).
 - Synthetic, single-company knowledge base (48 chunks); retrieval misses some paraphrased questions (documented in the RAG report).
 - Grounding checks are lexical; paraphrased unsupported claims without numbers or emails can pass.
 - PostgreSQL schema is provided as a snapshot (`docker/postgres/`); migrations in `backend/migrations/` target SQLite only.

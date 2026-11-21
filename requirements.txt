@@ -12,3 +12,4 @@ pytest
 httpx
 locust
 psycopg2-binary==2.9.13
+argon2-cffi==25.1.0
