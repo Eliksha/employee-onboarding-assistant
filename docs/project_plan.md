@@ -5,17 +5,17 @@
 **Team member:** Eliksha Maheshwari  
 **Location:** Pune  
 **Mentor:** Shankhalika Sarkar  
-**Last updated:** 20 November 2026
+**Last updated:** 21 November 2026
 
 ## 1. Milestones
 
 | Milestone | Planned day | Deliverable | Current status |
 |---|---|---|---|
 | M1 — Design | 31 | Charter, architecture, repository, synthetic data | Completed for local prototype |
-| M2 — Backend + AI | 32 | FastAPI, RAG, FAISS, employee data APIs, orchestration | Implemented locally; Azure OpenAI migration pending |
-| M3 — UI + Middleware | 33 | React dashboard, chat, checklist, support center, validation | Implemented and manually tested |
-| M4 — Deploy + Test | 34 | Docker, Azure deployment, CI/CD, unit/integration/load/security tests | Local automated/API checks passed; deployment and remaining tests pending |
-| M5 — Wrap-up | After | Runbook, architecture diagrams, storyboard, slides, demo, final repository | Pending |
+| M2 — Backend + AI | 32 | FastAPI, RAG, FAISS, employee data APIs, orchestration | Completed locally (RAG eval 50/50, guardrails); Azure OpenAI migration pending |
+| M3 — UI + Middleware | 33 | React dashboard, chat, checklist, support center, validation | Completed; browser E2E 16/16 |
+| M4 — Deploy + Test | 34 | Docker, Azure deployment, CI/CD, unit/integration/load/security tests | Docker + local testing completed (Step 10); Azure deployment, CI/CD and load tests pending |
+| M5 — Wrap-up | After | Runbook, architecture diagrams, storyboard, slides, demo, final repository | Runbook, architecture, demo script, final test report done; slides pending |
 
 ## 2. Scope and Technology Decisions
 
@@ -118,7 +118,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 
 ## 10. Next Immediate Step
 
-**Step 71 — Azure readiness audit:** inspect the current Docker configuration, environment-variable references, Azure integration points, and available Azure permissions **without provisioning or changing cloud resources**. Record the findings here before implementation.
+**Next (after Step 10):** Azure milestones A1-A6 listed under "Step 10 - Final Local Testing and Release Readiness" below, starting with A1 (confirm Azure access). Local Steps 1-10 are complete.
 
 ### PostgreSQL Dependency Update � 20 November 2026
 
@@ -359,3 +359,35 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Regression: `pytest` 80 passed; `npm test` 4 passed.
 
 **Remaining documentation gaps:** `docs/runbook.md` and `docs/demo_script.md` are still placeholders; `docs/test_questions.md` and `docs/test_report.md` reflect the Day 32 test set (superseded by `docs/rag_eval_report.md`); the PostgreSQL `psql -f` load path for a non-Docker database is documented but was only executed via Docker initialisation; no Azure deployment documentation can be written until Azure access exists.
+
+### Step 10 - Final Local Testing and Release Readiness (Completed: 21 November 2026)
+
+**Status:** Completed - local release PASS; not production-ready (no authentication, Azure not implemented). No application code changed. Full evidence: `docs/final_local_test_report.md`.
+
+**Results (all executed 21 Nov 2026 on commit `9af56cc`, isolated Docker project with disposable volumes; real PostgreSQL not accessed; FAISS index and `docs/rag_eval_report.md` unchanged by SHA-256):**
+
+| Check | Result |
+|---|---|
+| `pytest` | 80 passed |
+| `npm test` / `npm run build` | 4 passed / succeeded |
+| `npm run lint` | FAIL - 7 pre-existing errors (unchanged since Step 6; non-critical, unresolved) |
+| Live RAG evaluation (report to temp path) | 50/50, MRR 0.971; 2 known retrieval gaps unchanged |
+| Docker build + startup | 3/3 services healthy |
+| API integration via nginx / browser E2E | 18/18 / 16/16 |
+| Workflow sweep (3 employees, 5 policy categories with citations) | 15/15 |
+| Invalid inputs and unknown employees | 20/20 |
+| DB outage / recovery; live LLM outage; live retrieval failure | 5/5 + 1/1; 503; safe 500 |
+| Backend restart, crash recovery, full down/up | 4/4 each |
+| Secret/log scans, `npm audit` | No secrets in git, history, images or logs; 0 vulnerabilities |
+
+**New findings (documented, not fixed - pre-Azure hardening):** `/health` is liveness-only (stays 200 while the DB is down); Swagger UI and OpenAPI schema are reachable through nginx; nginx discloses its version and sends no security headers. Existing: no authentication, unauthenticated `POST /ingest`.
+
+**Documentation:** completed `docs/runbook.md` (start/stop, health, logs and request tracing, troubleshooting from observed errors) and `docs/demo_script.md` (10-minute walkthrough using verified questions); created `docs/final_local_test_report.md`; README documentation index and limitations updated; milestone table refreshed.
+
+**Next Azure milestones (not started; require Azure access):**
+1. **A1 - Access:** confirm subscription, roles, region and quotas with the trainer.
+2. **A2 - Azure OpenAI:** create resource and chat deployment; switch `backend/services/llm.py` configuration; re-run `pytest` and `python -m scripts.rag_eval`; recalibrate thresholds.
+3. **A3 - Data and secrets:** Azure Database for PostgreSQL from `docker/postgres/`; Key Vault / managed identity; no `.env` in cloud.
+4. **A4 - Hosting:** Azure Container Registry + container hosting for frontend/backend; HTTPS, security headers, readiness probe, API docs disabled, `/ingest` protected.
+5. **A5 - Identity:** Microsoft Entra ID sign-in and per-employee authorization before any non-demo use.
+6. **A6 - Operations:** CI/CD (pytest, npm test/build, image build), Azure Monitor / Application Insights using request IDs, load tests in `tests/load/`.

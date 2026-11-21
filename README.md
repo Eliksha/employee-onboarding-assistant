@@ -220,7 +220,7 @@ Error behaviour: invalid input returns 422 with a readable message, unknown empl
 | `cd frontend; npm run build` | Production build | Succeeded |
 | `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs `GROQ_API_KEY`, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (20 Nov 2026, live Groq) |
 
-Additional checks performed during development (scripts not in the repository): browser end-to-end tests in headless Chrome (16/16 against both the Vite dev server and the Docker stack) and Docker integration, restart and persistence checks (18/18 and 4/4). See [docs/project_plan.md](docs/project_plan.md) and [docs/rag_eval_report.md](docs/rag_eval_report.md).
+Additional checks performed during development (scripts not in the repository): browser end-to-end tests in headless Chrome (16/16 against both the Vite dev server and the Docker stack), Docker integration, restart and persistence checks (18/18 and 4/4), workflow and failure-case sweeps. Step 10 re-ran all of them on 21 Nov 2026, including a live RAG evaluation (50/50). See [docs/final_local_test_report.md](docs/final_local_test_report.md).
 
 ## Logging and security notes
 
@@ -247,10 +247,14 @@ Groq is used temporarily because Azure access is not yet available. The planned 
 - PostgreSQL schema is provided as a snapshot (`docker/postgres/`); migrations in `backend/migrations/` target SQLite only.
 - `requirements.txt` is unpinned and includes test tools; no HTTPS; no CI pipeline configured yet (`.github/workflows/` is empty); no load tests yet (`tests/load/` is empty).
 - `npm run lint` reports 7 pre-existing React lint errors (no functional impact found).
+- `/health` is a liveness check only (it stays 200 while the database is down); API docs (`/docs`, `/openapi.json`) are publicly reachable; nginx sends no security headers.
 
 ## Documentation
 
 - [docs/project_plan.md](docs/project_plan.md) - milestones, step-by-step progress, test evidence, risks
+- [docs/final_local_test_report.md](docs/final_local_test_report.md) - final local test results, known issues, Azure prerequisites
+- [docs/runbook.md](docs/runbook.md) - start/stop, health checks, logs, troubleshooting
+- [docs/demo_script.md](docs/demo_script.md) - 10-minute demonstration walkthrough
 - [docs/architecture.md](docs/architecture.md) - architecture and RAG flow
 - [docs/rag_eval_report.md](docs/rag_eval_report.md) - latest RAG evaluation output
 - [docs/problem_statement.md](docs/problem_statement.md) - capstone problem statement
