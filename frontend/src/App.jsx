@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LayoutDashboard, Bot, ClipboardCheck, CalendarDays, Laptop, Headset, Sparkles, Menu, X, Send, RefreshCw, ArrowRight, UserRound, ShieldCheck } from 'lucide-react';
 import { employeeApi } from './api';
+import { CHAT_MAX_LENGTH, formatSources } from './format';
 import './App.css';
 
 const EMPLOYEES = ['EMP001', 'EMP002', 'EMP003'];
@@ -41,9 +42,9 @@ function Chat({ employeeId }) {
   };
   return <section className="panel chat-panel"><div className="panel-heading"><div><h2>Ask OnboardAI</h2><p>Answers from your handbook and employee records.</p></div><button className="subtle-button" onClick={load}><RefreshCw size={16}/> Refresh</button></div>
     <div className="chat-messages">{!history.length && <div className="empty-state"><Bot size={38}/><h3>How can I help you today?</h3><p>Try “What is my leave balance?” or “What is the leave policy?”</p></div>}
-    {history.map((message, index) => <div className="exchange" key={message.id ?? index}><div className="bubble question">{message.question}</div><div className="bubble answer"><div className="answer-label"><Sparkles size={15}/> OnboardAI</div><p>{message.answer}</p>{message.sources && <small>Sources: {typeof message.sources === 'string' ? message.sources : JSON.stringify(message.sources)}</small>}</div></div>)}</div>
+    {history.map((message, index) => <div className="exchange" key={message.id ?? index}><div className="bubble question">{message.question}</div><div className="bubble answer"><div className="answer-label"><Sparkles size={15}/> OnboardAI</div><p>{message.answer}</p>{formatSources(message.sources) && <small>Sources: {formatSources(message.sources)}</small>}</div></div>)}</div>
     {error && <p className="error" role="alert">{String(error)}</p>}
-    <form className="chat-form" onSubmit={send}><input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask a question about onboarding..." aria-label="Chat question" maxLength={2000}/><button disabled={busy || !question.trim()} type="submit"><Send size={18}/>{busy ? 'Sending...' : 'Send'}</button></form>
+    <form className="chat-form" onSubmit={send}><input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask a question about onboarding..." aria-label="Chat question" maxLength={CHAT_MAX_LENGTH}/><button disabled={busy || !question.trim()} type="submit"><Send size={18}/>{busy ? 'Sending...' : 'Send'}</button></form>
     <p className="disclaimer">Demo only · Synthetic employee data · Responses may require HR verification.</p>
   </section>;
 }

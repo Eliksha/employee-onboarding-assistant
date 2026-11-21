@@ -251,3 +251,29 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Guardrail rejections are logged (reason only, no question text) via the `app` logger.
 
 **Azure migration notes:** re-run `python -m scripts.rag_eval` after switching to Azure OpenAI; re-validate the 0.65 threshold and 0.05 band with the new embedding model; add Azure AI Content Safety Prompt Shields for document injection; keep the output validators as model-independent checks.
+
+### Step 6 - Frontend Integration Verification (Completed: 21 November 2026)
+
+**Status:** Completed. No UI redesign, no API contract change, no Azure work. Not yet committed.
+
+**Inspected:** `frontend/src/App.jsx`, `api.js`, `main.jsx`, `vite.config.js`, `package.json`, `.gitignore`; `backend/main.py`, `middleware/__init__.py`, `routes/employees.py`, `routes/chat.py`, `schemas/models.py`, `services/db.py`, `services/employee_db.py`.
+
+**Changes:**
+- `frontend/src/format.js` (new): `formatSources()` and `CHAT_MAX_LENGTH = 500`.
+- `frontend/src/App.jsx`: chat sources shown as `file › section` (not raw JSON) and hidden when empty (previously "Sources: []" on every fallback answer); chat input `maxLength` 2000 -> 500 to match backend `ChatRequest`.
+- `frontend/src/format.test.js` (new, 4 tests) + `npm test` script (`node --test`, no new dependencies).
+- `tests/integration/test_frontend_contract.py` (new, 14 tests): every call in `api.js` maps to a FastAPI route; `/employees/payroll/calendar` not shadowed by `/employees/{id}`; chat length limits match; 422 `detail` is a string.
+
+**Verification:**
+- `npm run build`: success (JS 300.86 kB / 97.10 kB gzip). `npm test`: 4/4 passed.
+- `python -m pytest -q`: **58 passed** (44 existing + 14 new; isolated SQLite).
+- Browser E2E (headless Chrome via Playwright installed in a scratch venv only; backend on a **scratch copy** of `data/app.db`, `DB_BACKEND=sqlite`; live Groq): **16/16 passed** after fixes (14/16 before: chat maxlength and raw sources confirmed as defects). Covered: dashboard/profile, employee switching, leave & payroll, assets, checklist toggle + persistence after reload, ticket create + refresh, ticket validation (no POST sent), RAG answer with cited source, unknown-question fallback, employee-specific chat, history reload order, mocked 503, mocked empty lists, network-down error messages, no console errors.
+- API through Vite proxy: 8 GET endpoints 200; 404/422 paths return readable string `detail`. `vite preview` also proxies `/api` (inherits `server.proxy`).
+- Real `data/app.db` (timestamp 20 Nov 15:30, 0 E2E tickets) and the FAISS index unchanged; PostgreSQL not used.
+
+**Limitations / not changed:**
+- `npm run lint` fails with 7 **pre-existing** errors (5 x React 19 `react-hooks/set-state-in-effect`, 2 unused variables); identical on the committed code. Fixing requires refactoring data-loading effects; deferred.
+- No CORS middleware and API base URL is hard-coded to `/api`: works only same-origin via the Vite dev/preview proxy. Production hosting needs a reverse proxy (or CORS + configurable base URL) - to be decided with the Azure deployment design.
+- Employee list (EMP001-EMP003) is hard-coded in the frontend; selector is not authentication.
+- Chat history has no loading indicator (shows the empty-state prompt until history arrives); dashboard header shows the employee ID until the profile loads. Cosmetic, left unchanged.
+- E2E script lives outside the repository (scratch) and is not part of CI; mobile layout not tested.
