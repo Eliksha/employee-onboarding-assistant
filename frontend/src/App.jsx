@@ -9,6 +9,11 @@ const NAV = [
   ['Dashboard', LayoutDashboard], ['AI Assistant', Bot], ['My Checklist', ClipboardCheck],
   ['Leave & Payroll', CalendarDays], ['My Assets', Laptop], ['Support Center', Headset],
 ];
+// Records loaded for the table pages: [record key, employeeApi method].
+const PAGE_TASKS = {
+  'Leave & Payroll': [['leave', 'leave'], ['payroll', 'payroll']],
+  'My Assets': [['assets', 'assets']],
+};
 const unwrap = (data) => data?.items ?? data?.data ?? data?.results ?? data;
 const asList = (data) => Array.isArray(unwrap(data)) ? unwrap(data) : [];
 const display = (value) => value === null || value === undefined || value === '' ? '—' : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value);
@@ -26,10 +31,11 @@ function Chat({ employeeId }) {
   const [question, setQuestion] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const load = useCallback(async () => {
-    try { const response = await employeeApi.history(employeeId); setHistory(asList(response.data).reverse()); setError(''); }
-    catch (err) { setHistory([]); setError(err.response?.data?.detail ?? 'Could not load chat history. Check the FastAPI server.'); }
-  }, [employeeId]);
+  // State is only updated in promise callbacks, never synchronously inside the effect.
+  const load = useCallback(() => employeeApi.history(employeeId)
+    .then((response) => { setHistory(asList(response.data).reverse()); setError(''); })
+    .catch((err) => { setHistory([]); setError(err.response?.data?.detail ?? 'Could not load chat history. Check the FastAPI server.'); }),
+  [employeeId]);
   useEffect(() => { load(); }, [load]);
   const send = async (event) => {
     event.preventDefault();
@@ -55,20 +61,22 @@ function Checklist({ employeeId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState({});
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const response = await employeeApi.checklist(employeeId);
-      setItems(asList(response.data));
-    } catch (err) {
+  // Fetch only; state changes happen in promise callbacks (safe to call from an effect).
+  const fetchItems = useCallback(() => employeeApi.checklist(employeeId)
+    .then((response) => setItems(asList(response.data)))
+    .catch((err) => {
       setItems([]);
       setError(err.response?.data?.detail ?? 'Could not load checklist.');
-    } finally {
-      setLoading(false);
-    }
-  }, [employeeId]);
-  useEffect(() => { load(); }, [load]);
+    })
+    .finally(() => setLoading(false)), [employeeId]);
+  // Initial load: `loading` starts true and the component remounts per employee (key={employeeId}).
+  useEffect(() => { fetchItems(); }, [fetchItems]);
+  // Refresh button: event handler, so resetting loading/error synchronously is fine.
+  const load = () => {
+    setLoading(true);
+    setError('');
+    return fetchItems();
+  };
 
   const isDone = (item) => Boolean(item.done ?? item.is_done ?? item.completed ?? (item.status === 'completed' || item.status === 'done'));
   const getId = (item) => item.id ?? item.item_id;
@@ -117,21 +125,24 @@ function SupportCenter({ employeeId }) {
   const [success, setSuccess] = useState('');
   const [form, setForm] = useState({ category: 'HR', subject: '', description: '' });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const response = await employeeApi.tickets(employeeId);
-      setTickets(asList(response.data));
-    } catch (err) {
+  // Fetch only; state changes happen in promise callbacks (safe to call from an effect).
+  const fetchTickets = useCallback(() => employeeApi.tickets(employeeId)
+    .then((response) => setTickets(asList(response.data)))
+    .catch((err) => {
       setTickets([]);
       setError(err.response?.data?.detail ?? 'Could not load support tickets.');
-    } finally {
-      setLoading(false);
-    }
-  }, [employeeId]);
+    })
+    .finally(() => setLoading(false)), [employeeId]);
 
-  useEffect(() => { load(); }, [load]);
+  // Initial load: `loading` starts true and the component remounts per employee (key={employeeId}).
+  useEffect(() => { fetchTickets(); }, [fetchTickets]);
+
+  // Refresh button: event handler, so resetting loading/error synchronously is fine.
+  const load = () => {
+    setLoading(true);
+    setError('');
+    return fetchTickets();
+  };
 
   const submit = async (event) => {
     event.preventDefault();
@@ -204,19 +215,33 @@ function App() {
   const [employeeId, setEmployeeId] = useState('EMP001');
   const [page, setPage] = useState('Dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [profile, setProfile] = useState(null);
-  const [profileError, setProfileError] = useState('');
-  const [records, setRecords] = useState({});
-  const [loading, setLoading] = useState(false);
+  // Results are stored with the request they belong to; stale/empty states are derived during render
+  // instead of being reset synchronously inside effects.
+  const [profileResult, setProfileResult] = useState({ employeeId: null, data: null, error: '' });
+  const [recordsResult, setRecordsResult] = useState({ requestKey: null, records: {} });
   const navigate = (next) => { setPage(next); setSidebarOpen(false); };
-  useEffect(() => { let live = true; setProfile(null); setProfileError(''); employeeApi.profile(employeeId).then(({ data }) => { if (live) setProfile(unwrap(data)); }).catch(() => { if (live) setProfileError('Profile unavailable. Start the FastAPI backend.'); }); return () => { live = false; }; }, [employeeId]);
   useEffect(() => {
-    if (page === 'Dashboard' || page === 'AI Assistant') return;
-    const tasks = page === 'Leave & Payroll' ? [['leave', employeeApi.leave], ['payroll', employeeApi.payroll]] : page === 'My Checklist' ? [] : page === 'My Assets' ? [['assets', employeeApi.assets]] : page === 'Support Center' ? [] : [];
-    let live = true; setLoading(true); setRecords({});
-    Promise.all(tasks.map(async ([key, fn]) => { try { const result = await fn(employeeId); return [key, { data: result.data }]; } catch (error) { return [key, { error: error.response?.data?.detail ?? 'Unable to load records.' }]; } })).then((entries) => { if (live) { setRecords(Object.fromEntries(entries)); setLoading(false); } });
+    let live = true;
+    employeeApi.profile(employeeId)
+      .then(({ data }) => { if (live) setProfileResult({ employeeId, data: unwrap(data), error: '' }); })
+      .catch(() => { if (live) setProfileResult({ employeeId, data: null, error: 'Profile unavailable. Start the FastAPI backend.' }); });
     return () => { live = false; };
-  }, [employeeId, page]);
+  }, [employeeId]);
+  const profileCurrent = profileResult.employeeId === employeeId;
+  const profile = profileCurrent ? profileResult.data : null;
+  const profileError = profileCurrent ? profileResult.error : '';
+
+  const pageTasks = PAGE_TASKS[page];
+  const requestKey = pageTasks ? `${employeeId}|${page}` : null;
+  useEffect(() => {
+    if (!pageTasks) return undefined;
+    let live = true;
+    Promise.all(pageTasks.map(async ([key, method]) => { try { const result = await employeeApi[method](employeeId); return [key, { data: result.data }]; } catch (error) { return [key, { error: error.response?.data?.detail ?? 'Unable to load records.' }]; } }))
+      .then((entries) => { if (live) setRecordsResult({ requestKey, records: Object.fromEntries(entries) }); });
+    return () => { live = false; };
+  }, [employeeId, pageTasks, requestKey]);
+  const loading = requestKey !== null && recordsResult.requestKey !== requestKey;
+  const records = loading ? {} : recordsResult.records;
   const name = profile?.full_name ?? profile?.name ?? employeeId;
   const panels = page === 'Leave & Payroll' ? [['leave', 'Leave Balances'], ['payroll', 'Payroll Calendar']] : page === 'My Checklist' ? [] : page === 'My Assets' ? [['assets', 'Assigned Assets']] : page === 'Support Center' ? [] : [];
   return <div className="app-shell">
@@ -225,7 +250,7 @@ function App() {
     <div className="main-area"><header className="topbar"><div className="breadcrumb"><button className="menu-button" aria-label="Open menu" onClick={() => setSidebarOpen(true)}><Menu size={22}/></button><span>Workspace</span><span>/</span><strong>{page}</strong></div><div className="topbar-right"><span className="environment">LOCAL DEMO</span><div className="avatar">{name[0]}</div></div></header>
     <main className="content"><div className="page-header"><div><div className="eyebrow">✦ YOUR ONBOARDING WORKSPACE</div><h1>{page === 'Dashboard' ? `Welcome, ${name.split(' ')[0]}!` : page}</h1><p>{page === 'Dashboard' ? 'Everything you need to get started, all in one place.' : 'Your employee-specific onboarding workspace.'}</p></div><label className="employee-selector"><span>VIEWING AS · DEMO ONLY</span><div><UserRound size={17}/><select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>{EMPLOYEES.map((id) => <option value={id} key={id}>{id}</option>)}</select></div></label></div>
     {profileError && <div className="error" role="alert">{profileError}</div>}
-    {page === 'Dashboard' && <><section className="hero"><div className="hero-text"><span className="hero-tag"><Sparkles size={14}/> YOUR AI-POWERED ONBOARDING COMPANION</span><h2>A smoother start.<br/>A smarter journey.</h2><p>From first-day questions to HR support, OnboardAI helps you find your way.</p><button onClick={() => navigate('AI Assistant')}>Explore AI Assistant <ArrowRight size={17}/></button></div><div className="hero-art"><Sparkles size={88}/></div></section><h2 className="section-title">Your workspace</h2><p className="section-subtitle">Quick access to your onboarding essentials.</p><div className="action-grid">{NAV.slice(1).map(([label, Icon], index) => <button className="action-card" key={label} onClick={() => navigate(label)}><div className={`action-icon tone-${index}`}><Icon size={24}/></div><h3>{label}</h3><p>{label === 'AI Assistant' ? 'Ask questions about HR policies and your onboarding.' : `Explore your ${label.toLowerCase()} information.`}</p><ArrowRight size={18} className="action-arrow"/></button>)}</div><section className="panel profile-card"><div className="panel-heading"><h2>Employee snapshot</h2><span className="pill">{employeeId}</span></div>{profile ? <div className="detail-grid">{Object.entries(profile).filter(([key, value]) => ['string', 'number'].includes(typeof value)).map(([key, value]) => <div key={key}><small>{pretty(key)}</small><strong>{display(value)}</strong></div>)}</div> : <p className="muted">Loading employee profile...</p>}</section></>}
+    {page === 'Dashboard' && <><section className="hero"><div className="hero-text"><span className="hero-tag"><Sparkles size={14}/> YOUR AI-POWERED ONBOARDING COMPANION</span><h2>A smoother start.<br/>A smarter journey.</h2><p>From first-day questions to HR support, OnboardAI helps you find your way.</p><button onClick={() => navigate('AI Assistant')}>Explore AI Assistant <ArrowRight size={17}/></button></div><div className="hero-art"><Sparkles size={88}/></div></section><h2 className="section-title">Your workspace</h2><p className="section-subtitle">Quick access to your onboarding essentials.</p><div className="action-grid">{NAV.slice(1).map(([label, Icon], index) => <button className="action-card" key={label} onClick={() => navigate(label)}><div className={`action-icon tone-${index}`}><Icon size={24}/></div><h3>{label}</h3><p>{label === 'AI Assistant' ? 'Ask questions about HR policies and your onboarding.' : `Explore your ${label.toLowerCase()} information.`}</p><ArrowRight size={18} className="action-arrow"/></button>)}</div><section className="panel profile-card"><div className="panel-heading"><h2>Employee snapshot</h2><span className="pill">{employeeId}</span></div>{profile ? <div className="detail-grid">{Object.entries(profile).filter(([, value]) => ['string', 'number'].includes(typeof value)).map(([key, value]) => <div key={key}><small>{pretty(key)}</small><strong>{display(value)}</strong></div>)}</div> : <p className="muted">Loading employee profile...</p>}</section></>}
     {page === 'AI Assistant' && <Chat key={employeeId} employeeId={employeeId}/>}
     {panels.map(([key, title]) => <section className="panel" key={key}><div className="panel-heading"><h2>{title}</h2><span className="pill">{employeeId}</span></div>{loading ? <p className="muted">Loading records...</p> : records[key]?.error ? <p className="error">{String(records[key].error)}</p> : <DataTable data={records[key]?.data} empty="No records available for this employee."/>}</section>)}
     {page === 'My Checklist' && <Checklist key={employeeId} employeeId={employeeId}/>}

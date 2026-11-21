@@ -5,6 +5,8 @@ Date: 21 November 2026 | Commit under test: `9af56cc` (branch `dev`) | Tester: E
 
 **Verdict:** the local release (React + FastAPI + PostgreSQL + FAISS + temporary Groq, run with Docker Compose) **passes** all functional, failure-handling, persistence and evaluation checks below. It is **not production-ready**: there is no authentication, Azure is not implemented, and the hardening items in section 6 remain open.
 
+> **Update (21 November 2026, Local Improvement 1):** the frontend lint failure in row 4 has since been resolved - `npm run lint` reports 0 errors and 0 warnings. Details in `docs/project_plan.md`. The rest of this report is unchanged.
+
 ## 1. Test environment
 
 | Item | Version / setting |

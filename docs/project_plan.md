@@ -391,3 +391,27 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 4. **A4 - Hosting:** Azure Container Registry + container hosting for frontend/backend; HTTPS, security headers, readiness probe, API docs disabled, `/ingest` protected.
 5. **A5 - Identity:** Microsoft Entra ID sign-in and per-employee authorization before any non-demo use.
 6. **A6 - Operations:** CI/CD (pytest, npm test/build, image build), Azure Monitor / Application Insights using request IDs, load tests in `tests/load/`.
+
+### Local Improvement 1 - Frontend ESLint Errors Fixed (Completed: 21 November 2026)
+
+**Status:** Completed. `npm run lint` now reports **0 errors, 0 warnings** (was 7 errors). No ESLint rules disabled or suppressed; no UI, API contract, backend, dependency or data changes. Not yet committed.
+
+**Files:** `frontend/src/App.jsx`, `frontend/src/api.js`; docs: `README.md` (test table, limitations), `docs/final_local_test_report.md` (update note).
+
+| # | Original error | Cause | Fix |
+|---|---|---|---|
+| 1 | `App.jsx:33` set-state-in-effect (Chat) | Effect called async `load()` that set state | `load` is a promise chain; state set only in `.then/.catch` callbacks |
+| 2 | `App.jsx:71` set-state-in-effect (Checklist) | Effect called `load()`, which ran `setLoading(true)` / `setError('')` synchronously | Effect calls `fetchItems()` (state set in callbacks); initial `loading=true` plus `key={employeeId}` remount covers resets; Refresh handler resets synchronously (allowed in event handlers) |
+| 3 | `App.jsx:134` set-state-in-effect (SupportCenter) | Same as #2 | Same pattern (`fetchTickets()`) |
+| 4 | `App.jsx:212` set-state-in-effect (profile) | `setProfile(null)` / `setProfileError('')` on employee change | Result stored with its `employeeId`; profile/error derived during render; stale responses ignored via cleanup flag |
+| 5 | `App.jsx:216` set-state-in-effect (leave/payroll/assets) | `setLoading(true)` / `setRecords({})` on page or employee change | Result stored with a request key (`employee|page`); `loading` and `records` derived during render; page-to-endpoint map moved to a module constant |
+| 6 | `App.jsx:228` no-unused-vars | Unused `key` in profile filter | `([, value])` |
+| 7 | `api.js:34` no-unused-vars | `payroll(id)` ignored `id` (calendar is company-wide) | `payroll()`; request unchanged |
+
+**Verification (all executed):**
+- `npm run lint` and `eslint . --max-warnings 0`: exit 0. `npm test`: 4/4. `npm run build`: succeeded (301.0 kB JS).
+- Backend `pytest`: 80 passed (no backend changes).
+- Browser regression (headless Chrome, Vite dev server, backend on a scratch copy of the SQLite DB): existing suite **16/16**; refactor-specific checks: Refresh buttons send exactly one request each (checklist, tickets, chat history), error then Refresh recovery, stale profile and stale leave responses ignored after fast employee switching, no uncaught page errors - **5/5**; loading texts for profile, records and checklist observed during delayed requests - **3/3** (an initial loading check failed only because the test's blocking `time.sleep` mock froze the test driver; re-verified with a non-blocking in-browser delay).
+- Behaviour note: the leave/payroll/assets pages now show "Loading records..." from the first render instead of briefly showing the empty-table message.
+
+**Remaining:** no React component test framework in the project (no new dependency added), so the refactor is covered by browser checks that live outside the repository rather than by unit tests.

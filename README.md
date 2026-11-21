@@ -217,6 +217,7 @@ Error behaviour: invalid input returns 422 with a readable message, unknown empl
 |---|---|---|
 | `python -m pytest -q` | Unit and integration tests (RAG, guardrails, API, error handling, logging, frontend contract, Docker config). Always uses a temporary SQLite database; PostgreSQL connections are blocked in tests. | **80 passed** (21 Nov 2026) |
 | `cd frontend; npm test` | Frontend helper tests (Node test runner) | **4 passed** |
+| `cd frontend; npm run lint` | ESLint (React hooks rules) | **0 errors, 0 warnings** |
 | `cd frontend; npm run build` | Production build | Succeeded |
 | `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs `GROQ_API_KEY`, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (20 Nov 2026, live Groq) |
 
@@ -246,7 +247,6 @@ Groq is used temporarily because Azure access is not yet available. The planned 
 - Grounding checks are lexical; paraphrased unsupported claims without numbers or emails can pass.
 - PostgreSQL schema is provided as a snapshot (`docker/postgres/`); migrations in `backend/migrations/` target SQLite only.
 - `requirements.txt` is unpinned and includes test tools; no HTTPS; no CI pipeline configured yet (`.github/workflows/` is empty); no load tests yet (`tests/load/` is empty).
-- `npm run lint` reports 7 pre-existing React lint errors (no functional impact found).
 - `/health` is a liveness check only (it stays 200 while the database is down); API docs (`/docs`, `/openapi.json`) are publicly reachable; nginx sends no security headers.
 
 ## Documentation

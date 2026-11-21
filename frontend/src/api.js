@@ -31,7 +31,8 @@ export const employeeApi = {
   createTicket: (id, payload) =>
     api.post(`/employees/${encodeURIComponent(id)}/tickets`, payload),
 
-  payroll: (id) =>
+  // The payroll calendar is company-wide, so no employee ID is sent.
+  payroll: () =>
     api.get('/employees/payroll/calendar'),
 
   chat: (id, question) =>
