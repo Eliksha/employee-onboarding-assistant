@@ -104,6 +104,18 @@ def test_activity_extends_idle_window(emp1_client, monkeypatch):
     assert emp1_client.get("/auth/me").status_code == 200
 
 
+def test_active_session_survives_short_idle_timeout(emp1_client, monkeypatch):
+    """Regression (final Docker verification): with a 1-minute idle timeout, requests every 40 s must keep
+    the session alive; previously last_seen was refreshed only every 60 s, so active users were signed out."""
+    monkeypatch.setattr(settings, "session_idle_minutes", 1)
+    start = auth._now()
+    for offset in (40, 80, 120):
+        monkeypatch.setattr(auth, "_now", lambda o=offset: start + o)
+        assert emp1_client.get("/auth/me").status_code == 200, offset
+    monkeypatch.setattr(auth, "_now", lambda: start + 120 + 61)  # then genuinely idle for > 60 s
+    assert emp1_client.get("/auth/me").status_code == 401
+
+
 def test_session_persists_across_page_refresh(emp1_client):
     csrf = emp1_client.headers["X-CSRF-Token"]
     refreshed = new_client()  # a "new page load" with only the browser cookie

@@ -181,11 +181,14 @@ def resolve_session(token: str) -> Optional[SessionContext]:
             WHERE s.token_hash = ?""", (token_hash,), one=True)
         if row is None:
             return None
-        idle_limit = row["last_seen_at"] + settings.session_idle_minutes * 60
+        idle_seconds = settings.session_idle_minutes * 60
+        idle_limit = row["last_seen_at"] + idle_seconds
         if now >= row["expires_at"] or now >= idle_limit or not row["is_active"]:
             db._execute(con, "DELETE FROM user_sessions WHERE token_hash = ?", (token_hash,))
             return None
-        if now - row["last_seen_at"] >= TOUCH_INTERVAL_SECONDS:
+        # Refresh last_seen at most once a minute to limit writes, but always within half the idle
+        # window, so a user who stays active is never timed out (even with short idle settings).
+        if now - row["last_seen_at"] >= min(TOUCH_INTERVAL_SECONDS, max(1, idle_seconds // 2)):
             db._execute(con, "UPDATE user_sessions SET last_seen_at = ? WHERE token_hash = ?", (now, token_hash))
     user = AuthUser(int(row["user_id"]), row["email"], row["role"], row["employee_id"])
     return SessionContext(user=user, csrf_token=row["csrf_token"], token_hash=token_hash)

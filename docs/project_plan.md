@@ -491,3 +491,50 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - The running local stack (`employee-onboarding-assistant`, ports 8001/8080) still uses the previous backend image; rebuild it (`docker compose up -d --build`) to get the new `/health` behaviour.
 - The isolated test stack was stopped and its images removed; its volumes `onboardai-health_pgdata` and `onboardai-health_logs` were kept (no volumes deleted) and can be removed manually when no longer needed.
 - Password rotation for the Docker PostgreSQL database remains deferred (see the Docker manual verification section).
+
+
+### Final Local Docker and Security Verification (Completed: 22 November 2026)
+
+**Status:** PASS - local development phase ready to close. One genuine defect was found and fixed (session idle refresh). No Azure services, no `.env` or credential changes, no Docker volumes deleted, main Docker application not stopped or modified. Not yet committed.
+
+**Verification environments**
+- **Main stack** (`employee-onboarding-assistant`, frontend 8080, backend 8001): non-invasive checks only - no logins with real accounts, no data writes.
+- **Isolated stack** (`onboardai-final`, ports 8103/8183, own PostgreSQL volume): synthetic accounts for EMP001-EMP003 and an admin with random per-run passwords; used for all authenticated, write, restart and outage checks. Session expiry was verified on a temporary one-off backend container (port 8104) with `SESSION_IDLE_MINUTES=1`, `SESSION_TTL_MINUTES=2` sharing the isolated database; removed afterwards.
+
+**Automated results (executed 22 Nov 2026)**
+
+| Check | Result |
+|---|---|
+| Backend `python -m pytest -q` | **189 passed** (154 before: +34 new isolation/security tests, +1 session regression test) |
+| Security-focused subset (auth, isolation, error handling, health, guardrails) | 141 passed (before the regression test was added) |
+| Frontend `npm test` / ESLint `--max-warnings 0` / `npm run build` | 7 passed / 0 errors, 0 warnings / succeeded |
+| `docker compose config --quiet`; `test_docker_config.py` | valid; 7 passed |
+| Main stack (non-invasive, API via nginx) | 4/4: `/health` 200 `database: ok`; all 17 protected routes 401 without a session; invalid requests safe 4xx; unknown email generic 401 |
+| Isolated stack - headless Chrome (Playwright, scripted) | 13/13: login page, password toggle, generic invalid-credential errors, sign-in, HttpOnly/SameSite cookie not readable by JS and no browser storage, refresh persistence, leave/assets/checklist (persisted after refresh, then restored)/ticket, RAG chat with citation + history, CSRF header on all writes, cross-employee and CSRF-less requests 403 from the page, expired session -> login, sign out |
+| Isolated stack - API via nginx | 17/17 (re-run 17/17 on the fixed image): unauthenticated sweep, invalid requests, login and cookie flags, identical invalid-credential errors, own profile retrieval, EMP001 <-> EMP002 read/write isolation in both directions, checklist isolation, live Groq RAG with cited source, chat history isolation, feedback own 200 / cross 403, CSRF (missing or other session's token) 403, RBAC (employee 403 on admin routes, admin 403 on employee data, admin authorized for ingest/legacy checklist), no hashes/tokens/passwords in responses, logout + replayed cookie 401, rate limit 429 with `Retry-After` |
+| Isolated stack - backend restart | 4/4: checklist change, server-side session and chat history persisted |
+| Isolated stack - database outage | DB stopped: `/api/health` 503 in ~3.4 s, backend container `unhealthy` (not restarted); DB started: healthy, 200 |
+| Live session expiry (one-off backend) | Initially 2/3 (defect below); after the fix **3/3**: idle session rejected after > 60 s; active session valid until, and rejected after, the 2-minute absolute lifetime |
+| Log scans | Isolated stack (855 lines): 0 occurrences of account passwords, DB password, API key, session or CSRF token, emails or hashes. Main stack (523 lines): 0 key-like tokens, hashes, `password=`, cookies, CSRF tokens or emails |
+
+**Manually verified results** (by the project owner, earlier on 22 Nov 2026 - recorded in "Docker Integration - Manual Verification"): Docker build/health, employee login at `http://localhost:8080`, chatbot answer, checklist persistence after refresh, logout. No additional manual browser verification was performed in this step; the browser checks above are automated.
+
+**Security review**
+- Hardcoded credentials: none in tracked code (only fake `gsk_FAKE...` keys inside tests). `.env` not tracked and never in git history; only `.env.example` is tracked.
+- SQL: all queries use bound parameters; no f-string, `.format` or `%` SQL (now enforced by `test_backend_sql_uses_bound_parameters_only`).
+- Endpoints: 19 routes; only `GET /health` and `POST /auth/login` are public (route-inventory tests); all employee routes enforce own-employee authorization; writes require CSRF; admin routes require the admin role.
+- Sessions: random 256-bit tokens, only SHA-256 stored, rotation on login, server-side invalidation on logout/password change/disable, absolute and idle expiry (fixed below).
+- Cross-employee leakage: none found (profile, leave, assets, checklist, tickets, chat, history, feedback tested in both directions).
+
+**Fix implemented**
+- `backend/services/auth.py` (`resolve_session`): `last_seen_at` was refreshed at most every 60 s, so with an idle timeout of 60 s or less an active user was signed out (with the default 60-minute timeout an active session could end up to ~1 minute early). It is now refreshed after `min(60 s, idle timeout / 2)`, so active sessions never time out while writes stay limited. Regression test `test_active_session_survives_short_idle_timeout` fails on the old code and passes on the fix.
+
+**Files changed in this step:** `backend/services/auth.py` (fix), `tests/integration/test_auth.py` (regression test), `tests/integration/test_isolation_security.py` (new, 34 tests), `docs/project_plan.md`.
+
+**Remaining limitations / follow-ups**
+- The running main stack still uses the backend image built before the session fix; rebuild it (`docker compose up -d --build backend`) to apply it.
+- The main stack currently has one provisioned employee account; EMP002 isolation was therefore verified on the isolated stack with synthetic accounts, not on the main stack.
+- Docker test volumes kept as instructed: `onboardai-final_pgdata`, `onboardai-final_logs`, `onboardai-health_pgdata`, `onboardai-health_logs` (remove manually when no longer needed).
+- Unchanged known limitations: Docker PostgreSQL password rotation deferred (required before deployment or sharing); no MFA, password reset or external identity provider; in-memory login rate limiter (per process, resets on restart, possible 15-minute nuisance lockout); no HTTPS locally; public API docs; backend port also published on localhost while `X-Forwarded-For` is trusted.
+
+**Local development phase:** ready to close. Next phase: Azure (A1 access confirmation onward), not started.
