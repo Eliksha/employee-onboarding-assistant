@@ -33,7 +33,7 @@ def backend_routes():
 
 
 def test_api_js_is_parsed():
-    assert len(frontend_calls()) == 10
+    assert len(frontend_calls()) == 13
 
 
 @pytest.mark.parametrize("call", frontend_calls(), ids=lambda c: f"{c[0]} {c[1]}")
@@ -41,12 +41,11 @@ def test_every_frontend_call_has_a_backend_route(call):
     assert call in backend_routes(), f"frontend calls {call}, backend has no such route"
 
 
-def test_static_payroll_route_not_shadowed_by_employee_id_route(monkeypatch):
+def test_static_payroll_route_not_shadowed_by_employee_id_route(emp1_client, monkeypatch):
     from backend.services import employee_db
 
     monkeypatch.setattr(employee_db, "get_payroll_calendar", lambda: [{"payroll_month": "2099-01"}])
-    with TestClient(app) as client:
-        body = client.get("/employees/payroll/calendar")
+    body = emp1_client.get("/employees/payroll/calendar")
     assert body.status_code == 200 and body.json() == [{"payroll_month": "2099-01"}]
 
 
@@ -56,8 +55,7 @@ def test_chat_length_limit_matches_frontend():
     assert frontend_max == backend_max == 500
 
 
-def test_error_responses_use_string_detail_for_frontend():
+def test_error_responses_use_string_detail_for_frontend(emp1_client):
     """The UI renders `detail` directly, so validation errors must be readable strings, not arrays."""
-    with TestClient(app) as client:
-        r = client.post("/chat", json={"question": "x" * 501})
+    r = emp1_client.post("/chat", json={"question": "x" * 501})
     assert r.status_code == 422 and isinstance(r.json()["detail"], str)

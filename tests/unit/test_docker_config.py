@@ -48,3 +48,12 @@ def test_init_sql_creates_all_tables_and_seeds_only_synthetic_reference_data():
 def test_nginx_proxies_api_like_the_vite_dev_proxy():
     assert "location /api/" in NGINX and "rewrite ^/api/(.*)$ /$1 break;" in NGINX
     assert "http://backend:8000" in NGINX and "try_files $uri /index.html;" in NGINX
+
+
+def test_docker_auth_schema_matches_backend_ddl_and_creates_no_accounts():
+    from backend.services.auth_schema import POSTGRES_DDL
+
+    sql = (ROOT / "docker" / "postgres" / "03_auth_schema.sql").read_text(encoding="utf-8")
+    assert sql == POSTGRES_DDL
+    assert "INSERT" not in sql.upper() and "password_hash text NOT NULL" in sql
+    assert 'TRUST_PROXY_HEADERS: "true"' in COMPOSE

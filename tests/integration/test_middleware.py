@@ -47,11 +47,8 @@ def test_unhandled_error_returns_clean_json_500(caplog):
     assert any("unhandled error" in rec.getMessage() for rec in caplog.records)
 
 
-def test_validation_error_is_friendly(env):
-    from backend.main import app
-
-    client = TestClient(app)
-    r = client.post("/chat", json={"question": "   "})
+def test_validation_error_is_friendly(emp1_client):
+    r = emp1_client.post("/chat", json={"question": "   "})
     assert r.status_code == 422
     assert isinstance(r.json()["detail"], str) and "question" in r.json()["detail"].lower()
     assert "Value error" not in r.json()["detail"]

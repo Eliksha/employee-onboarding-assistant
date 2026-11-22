@@ -20,11 +20,11 @@ HITS = [{"source": "handbook.md", "section": "3. Payroll",
 
 
 @pytest.fixture
-def client(env, monkeypatch):
+def client(emp1_client, monkeypatch):
+    """Signed-in employee (EMP001); fake secrets so leakage checks have something to look for."""
     monkeypatch.setattr(settings, "groq_api_key", FAKE_KEY)
     monkeypatch.setattr(settings, "pg_password", FAKE_PW)
-    with TestClient(app, raise_server_exceptions=False) as c:
-        yield c
+    return emp1_client
 
 
 def _all_log_text(caplog):
@@ -93,7 +93,7 @@ def test_database_failure_on_employee_endpoint_is_safe_500_and_logged(client, mo
 def test_database_failure_on_history_and_feedback(client, monkeypatch):
     monkeypatch.setattr(chat_route, "get_employee", lambda *_: (_ for _ in ()).throw(psycopg2.OperationalError("down")))
     _assert_safe_500(client.get("/history", params={"employee_id": "EMP001"}))
-    monkeypatch.setattr(db, "message_exists", lambda *_: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    monkeypatch.setattr(db, "get_message_owner", lambda *_: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
     _assert_safe_500(client.post("/feedback", json={"message_id": 1, "rating": "up"}))
 
 
@@ -117,9 +117,10 @@ def test_retrieval_failure_is_server_error_not_client_error(client, monkeypatch,
 
 
 def test_unknown_employee_inside_pipeline_is_still_400(client, monkeypatch):
-    monkeypatch.setattr(chat_route, "get_employee", lambda *_: {"employee_id": "EMP777"})
+    # The session employee passes the route check but vanishes before the pipeline runs.
+    monkeypatch.setattr(chat_route, "get_employee", lambda *_: {"employee_id": "EMP001"})
     monkeypatch.setattr(orchestrator, "get_employee", lambda *_: None)
-    r = client.post("/chat", json={"question": "What is my leave balance?", "employee_id": "EMP777"})
+    r = client.post("/chat", json={"question": "What is my leave balance?"})
     assert r.status_code == 400 and r.json() == {"detail": "Invalid employee or query."}
 
 
@@ -146,7 +147,7 @@ def test_unknown_route_and_method_are_json(client):
 
 
 # ---------------------------------------------------------------- no secrets / sensitive text in logs
-def test_logs_contain_no_secrets_or_question_text(client, monkeypatch, caplog):
+def test_logs_contain_no_secrets_or_question_text(client, accounts, monkeypatch, caplog):
     monkeypatch.setattr(retriever, "search", lambda q, k=None: HITS)
     monkeypatch.setattr(llm, "generate_answer", lambda q, p: "Salary is credited on the last working day [Handbook 3].")
     with caplog.at_level(logging.DEBUG, logger="app"):
@@ -156,8 +157,13 @@ def test_logs_contain_no_secrets_or_question_text(client, monkeypatch, caplog):
         monkeypatch.setattr(retriever, "search", lambda q, k=None: (_ for _ in ()).throw(RuntimeError("boom")))
         client.post("/chat", json={"question": QUESTION})
         client.post("/chat", json={"question": QUESTION + "x" * 500})
+        client.post("/auth/login", json={"email": accounts["emp2"].email, "password": "wrong-" + accounts["emp2"].password})
+        relog = client.post("/auth/login", json={"email": accounts["emp1"].email, "password": accounts["emp1"].password})
     assert ok.status_code == 200 and ok.json()["found"] is True
     text = _all_log_text(caplog)
-    assert "chat answered" in text and "unhandled error" in text
-    for secret in (FAKE_KEY, FAKE_PW, "gsk_", QUESTION, "4711"):
+    assert "chat answered" in text and "unhandled error" in text and "login failed" in text
+    session_cookie = relog.cookies.get(settings.session_cookie_name) or client.cookies.get(settings.session_cookie_name)
+    secrets_to_check = (FAKE_KEY, FAKE_PW, "gsk_", QUESTION, "4711", accounts["emp1"].password,
+                        accounts["emp2"].password, accounts["emp2"].email, relog.json()["csrf_token"], session_cookie)
+    for secret in secrets_to_check:
         assert secret not in text, f"log leaked: {secret[:6]}..."
