@@ -10,7 +10,7 @@ from backend.config import settings
 
 
 @contextmanager
-def postgres_connection():
+def postgres_connection(connect_timeout: int = 10):
     """Provide a PostgreSQL connection with commit and rollback."""
 
     connection = psycopg2.connect(
@@ -19,7 +19,7 @@ def postgres_connection():
         dbname=settings.pg_database,
         user=settings.pg_user,
         password=settings.pg_password or os.environ.get("PGPASSWORD", ""),
-        connect_timeout=10,
+        connect_timeout=connect_timeout,
         cursor_factory=RealDictCursor,
     )
 

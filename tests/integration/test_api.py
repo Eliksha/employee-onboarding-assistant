@@ -3,7 +3,8 @@ from backend.services import llm, retriever
 
 
 def test_health(app_client):
-    assert app_client.get("/health").json() == {"status": "ok"}
+    r = app_client.get("/health")
+    assert r.status_code == 200 and r.json() == {"status": "ok", "database": "ok"}
 
 
 def test_chat_grounded_answer(emp1_client, monkeypatch, env):

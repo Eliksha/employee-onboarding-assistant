@@ -47,12 +47,12 @@ Re-running `set` with a new password resets the password and signs the account o
 
 | Check | Expected |
 |---|---|
-| `curl http://localhost:8000/health` (local or Docker) | `{"status":"ok"}` |
-| `curl http://localhost:8080/api/health` (Docker, through nginx) | `{"status":"ok"}` |
+| `curl http://localhost:8000/health` (local or Docker) | `{"status":"ok","database":"ok"}` (HTTP 200) |
+| `curl http://localhost:8080/api/health` (Docker, through nginx) | `{"status":"ok","database":"ok"}` (HTTP 200) |
 | `curl http://localhost:8080/api/employees/EMP001` | 401 when not signed in (proves the API is up and protected); sign in through the UI to check data access |
 | `docker compose ps` | `db`, `backend`, `frontend` all `(healthy)` |
 
-`/health` is a **liveness** check only: it stays 200 while PostgreSQL is down. Use an employee endpoint to confirm database connectivity.
+`/health` is **database-aware**: it runs `SELECT 1` with a 3-second timeout (`HEALTH_DB_TIMEOUT_SECONDS`) and returns HTTP 503 `{"status":"unavailable","database":"unavailable","detail":...}` when the database is unreachable; the Docker backend container then becomes `unhealthy` until the database is back (it is not restarted automatically). The log shows `health check: database unavailable (<error type>)` without connection details.
 
 ## 4. Logs and request tracing
 

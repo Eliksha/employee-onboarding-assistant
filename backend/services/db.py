@@ -1,5 +1,6 @@
 """Chat history, feedback, escalations and shared checklist storage."""
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -10,6 +11,8 @@ from backend.config import settings
 from backend.services.auth_schema import AUTH_TABLES, SQLITE_DDL
 from backend.services.employee_db import UnknownEmployeeError
 from backend.services.postgres import postgres_connection
+
+logger = logging.getLogger("app")
 
 
 def _postgres() -> bool:
@@ -66,6 +69,35 @@ def _insert_id(con, query, params):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def check_database() -> bool:
+    """Lightweight readiness probe for /health: True if the configured database answers `SELECT 1`.
+
+    Uses a short connect and statement timeout (HEALTH_DB_TIMEOUT_SECONDS). Never creates a database
+    file and never logs connection details - only the exception type.
+    """
+    timeout = max(1, int(settings.health_db_timeout_seconds))
+    try:
+        if _postgres():
+            with postgres_connection(connect_timeout=timeout) as con:
+                with con.cursor() as cur:
+                    cur.execute("SET statement_timeout = %s", (timeout * 1000,))
+                    cur.execute("SELECT 1 AS ok")
+                    cur.fetchone()
+        else:
+            path = Path(settings.db_path)
+            if not path.is_file():
+                raise FileNotFoundError("SQLite database file not found")
+            con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=timeout)
+            try:
+                con.execute("SELECT 1").fetchone()
+            finally:
+                con.close()
+        return True
+    except Exception as exc:  # any failure means "not ready"; details stay out of logs and responses
+        logger.warning("health check: database unavailable (%s)", type(exc).__name__)
+        return False
 
 
 def init_db() -> None:

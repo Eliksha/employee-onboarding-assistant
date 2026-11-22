@@ -465,3 +465,29 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - **Security - Deferred — required before deployment or sharing the environment:** rotate the Docker PostgreSQL password (`DOCKER_PG_PASSWORD`) because the original value was exposed. Reason for deferral: the current password is used only for a local demonstration with synthetic data. The value must not be recorded in this document or the repository.
 - Complete the remaining Docker feature verification (other workspace features not covered above).
 - Add database-aware health checks (the current `/health` endpoint is liveness-only and stays healthy while PostgreSQL is unavailable).
+
+
+### Local Improvement 3 - Database-Aware Health Checks (Completed: 22 November 2026)
+
+**Status:** Completed and verified. Resolves the outstanding item "Add database-aware health checks" from the Docker manual verification. Authentication, RAG, checklist and employee endpoints unchanged. No `.env` change, no volumes deleted, no Azure services. Not yet committed.
+
+**Implementation:**
+- `GET /health` (public) now runs a lightweight `SELECT 1` against the configured database: HTTP 200 `{"status":"ok","database":"ok"}` when reachable, HTTP 503 `{"status":"unavailable","database":"unavailable","detail":"Service unavailable: the database is not reachable."}` otherwise; `Cache-Control: no-store`.
+- `backend/services/db.py` `check_database()`: PostgreSQL via the existing `postgres_connection()` configuration with `connect_timeout` and `statement_timeout` of `HEALTH_DB_TIMEOUT_SECONDS` (default 3); SQLite opened read-only (never creates a file). Failures log only `health check: database unavailable (<error type>)` - no host, user, password or error text in logs or responses.
+- `backend/services/postgres.py`: `postgres_connection(connect_timeout=10)` parameter added; all other callers keep the 10-second default.
+- Docker: the existing `HEALTHCHECK` already requires HTTP 200 from `/health`, so no Dockerfile change was needed; timeouts nest correctly (DB probe 3 s < request 4 s < Docker check 5 s). A database outage now marks the backend container `unhealthy` (Docker does not restart it; it returns to `healthy` when the database recovers).
+- Docs: `README.md` and `docs/runbook.md` statements that `/health` was liveness-only corrected; `.env.example` documents `HEALTH_DB_TIMEOUT_SECONDS`.
+
+**Verification (executed 22 Nov 2026):**
+
+| Check | Result |
+|---|---|
+| `tests/unit/test_health.py` (rewritten) | 10 passed: SQLite healthy / missing (503, no file created), public access, PostgreSQL healthy with 3 s connect + statement timeout, PostgreSQL failures (OperationalError, timeout) -> 503 without leaking host/user/password, isolation guard -> 503, default timeout preserved for other callers, invalid backend -> unavailable, Docker HEALTHCHECK timeout nesting |
+| Full backend suite `python -m pytest -q` | **154 passed** (145 previously + 9 net new) |
+| Docker configuration | `test_docker_config.py` 7 passed; `docker compose config --quiet` valid |
+| Live Docker (isolated project `onboardai-health`, ports 8102/8182) | DB up: 200 direct and via nginx, container healthy. DB stopped: 503 in ~3.3 s (direct and via nginx), container `unhealthy`, restart count 0. DB restarted: container `healthy`, 200. Logs show only `database unavailable (OperationalError)`; 0 occurrences of the DB password |
+
+**Outstanding:**
+- The running local stack (`employee-onboarding-assistant`, ports 8001/8080) still uses the previous backend image; rebuild it (`docker compose up -d --build`) to get the new `/health` behaviour.
+- The isolated test stack was stopped and its images removed; its volumes `onboardai-health_pgdata` and `onboardai-health_logs` were kept (no volumes deleted) and can be removed manually when no longer needed.
+- Password rotation for the Docker PostgreSQL database remains deferred (see the Docker manual verification section).

@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     pg_database: str = "onboardai"
     pg_user: str = "postgres"
     pg_password: str = ""
+    # /health database probe: short connect + statement timeout (seconds) so a dead DB never hangs it.
+    # libpq treats connect timeouts below 2 s as 2 s.
+    health_db_timeout_seconds: int = 3
 
 
 settings = Settings()

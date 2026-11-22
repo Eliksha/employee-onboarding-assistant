@@ -246,7 +246,7 @@ All endpoints return JSON; errors use `{"detail": "<message>"}`. Every response 
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| GET | `/health` | Public | Liveness check |
+| GET | `/health` | Public | Database-aware health check: 200 `{"status":"ok","database":"ok"}`, or 503 when the database is unreachable |
 | POST | `/auth/login` | Public, rate-limited | Sign in (`email`, `password`); sets the session cookie |
 | GET | `/auth/me` | Session | Current user and CSRF token (restores the session after a refresh) |
 | POST | `/auth/logout` | Session + CSRF | Sign out (server-side session deleted) |
@@ -304,7 +304,7 @@ Groq is used temporarily because Azure access is not yet available. The planned 
 - Grounding checks are lexical; paraphrased unsupported claims without numbers or emails can pass.
 - PostgreSQL schema is provided as a snapshot (`docker/postgres/`); migrations in `backend/migrations/` target SQLite only.
 - `requirements.txt` is unpinned and includes test tools; no HTTPS; no CI pipeline configured yet (`.github/workflows/` is empty); no load tests yet (`tests/load/` is empty).
-- `/health` is a liveness check only (it stays 200 while the database is down); API docs (`/docs`, `/openapi.json`) are publicly reachable; nginx sends no security headers.
+- API docs (`/docs`, `/openapi.json`) are publicly reachable; nginx sends no security headers.
 
 ## Documentation
 

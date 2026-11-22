@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from backend import middleware
 from backend.logging_config import setup_logging
@@ -26,6 +27,17 @@ app.include_router(admin.router)
 app.include_router(employees.router)
 
 
+DATABASE_UNAVAILABLE = "Service unavailable: the database is not reachable."
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Public readiness check: 200 when the database answers, 503 otherwise (no connection details)."""
+    headers = {"Cache-Control": "no-store"}
+    if db.check_database():
+        return JSONResponse({"status": "ok", "database": "ok"}, headers=headers)
+    return JSONResponse(
+        status_code=503,
+        content={"status": "unavailable", "database": "unavailable", "detail": DATABASE_UNAVAILABLE},
+        headers=headers,
+    )
