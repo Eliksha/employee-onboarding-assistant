@@ -446,3 +446,22 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 | Log scans (Docker volume + console) | 0 occurrences of passwords, session token, CSRF token or employee emails; login events use email fingerprints |
 
 **Known limitations:** no MFA, password reset, self-service password change or external identity provider (Entra ID out of scope); rate limiter is in-memory per process (resets on restart, not shared across workers) and a known email can be locked for up to 15 minutes by failed attempts; in Docker the backend port 8000 is also published on localhost while `X-Forwarded-For` is trusted (per-IP limit bypassable locally; per-email limit still applies); HTTPS not configured locally, so `Secure` cookies apply only once HTTPS is in place; API docs (`/docs`) remain public (they expose no data without a session); admin actions are API-only; the real local PostgreSQL needs migration 004 and account provisioning before the backend will start against it (not run, by rule).
+
+
+### Docker Integration - Manual Verification (Completed: 22 November 2026)
+
+**Status:** Completed for the checks below (manually verified by the project owner). No application code changed.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Docker Compose built and started PostgreSQL, FastAPI and React | Completed |
+| 2 | All three containers reported healthy status | Completed |
+| 3 | Employee authentication through `http://localhost:8080` | Completed |
+| 4 | RAG chatbot answered an onboarding-related question | Completed |
+| 5 | Onboarding checklist: task completion persisted after page refresh | Completed |
+| 6 | Port mapping: backend on host port 8001, frontend on 8080, to avoid conflicts with local development servers (configurable via `BACKEND_PORT` / `FRONTEND_PORT`) | Completed |
+
+**Outstanding items:**
+- **Security - Deferred — required before deployment or sharing the environment:** rotate the Docker PostgreSQL password (`DOCKER_PG_PASSWORD`) because the original value was exposed. Reason for deferral: the current password is used only for a local demonstration with synthetic data. The value must not be recorded in this document or the repository.
+- Complete the remaining Docker feature verification (other workspace features not covered above).
+- Add database-aware health checks (the current `/health` endpoint is liveness-only and stays healthy while PostgreSQL is unavailable).
