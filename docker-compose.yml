@@ -38,8 +38,13 @@ services:
       PG_HOST: db
       PG_PORT: "5432"
       PG_DATABASE: onboardai
-      PG_USER: onboardai
-      PG_PASSWORD: ${DOCKER_PG_PASSWORD:?Set DOCKER_PG_PASSWORD for the container database}
+      # Least-privilege roles (backend/migrations/005_least_privilege_roles.py). Until they are provisioned
+      # and DOCKER_PG_APP_* / DOCKER_PG_READER_* are set, the backend keeps using the owner account.
+      PG_USER: ${DOCKER_PG_APP_USER:-onboardai}
+      PG_PASSWORD: ${DOCKER_PG_APP_PASSWORD:-${DOCKER_PG_PASSWORD:?Set DOCKER_PG_PASSWORD for the container database}}
+      PG_READER_USER: ${DOCKER_PG_READER_USER:-}
+      PG_READER_PASSWORD: ${DOCKER_PG_READER_PASSWORD:-}
+      PG_SCOPE_SECRET: ${DOCKER_PG_SCOPE_SECRET:-}      # same value stored by migration 005
       HF_HUB_OFFLINE: "1"   # embedding model is baked into the image
       # The backend sits behind nginx: use its X-Forwarded-For / -Proto for login rate limiting and
       # Secure cookies. SESSION_COOKIE_SECURE=auto sets Secure automatically once HTTPS terminates in front.

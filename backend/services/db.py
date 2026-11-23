@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from backend.config import settings
+from backend.services import employee_scope
 from backend.services.auth_schema import AUTH_TABLES, SQLITE_DDL
 from backend.services.employee_db import UnknownEmployeeError
 from backend.services.postgres import postgres_connection
@@ -100,6 +101,27 @@ def check_database() -> bool:
         return False
 
 
+LEAST_PRIVILEGE_HINT = "Provision roles with backend/migrations/005_least_privilege_roles.py (see docs/runbook.md)."
+
+
+def enforce_role_policy(app_is_superuser: bool) -> list[str]:
+    """PostgreSQL role hygiene at startup: refuse in production, warn otherwise. Returns the issues."""
+    if settings.pg_reader_user.strip() and len(settings.pg_scope_secret) < employee_scope.MIN_SECRET_LENGTH:
+        # Without the signing secret every employee-scoped read would fail closed: refuse to start.
+        raise RuntimeError(f"PG_READER_USER is set but PG_SCOPE_SECRET is missing or shorter than "
+                           f"{employee_scope.MIN_SECRET_LENGTH} characters. {LEAST_PRIVILEGE_HINT}")
+    issues = []
+    if app_is_superuser:
+        issues.append("the application connects to PostgreSQL as a superuser")
+    if not settings.pg_reader_user.strip():
+        issues.append("no dedicated read-only role (PG_READER_USER) is configured for SQL-agent queries")
+    if issues and settings.app_env.strip().lower() == "production":
+        raise RuntimeError("Unsafe database configuration: " + "; ".join(issues) + ". " + LEAST_PRIVILEGE_HINT)
+    for issue in issues:
+        logger.warning("database least-privilege check: %s. %s", issue, LEAST_PRIVILEGE_HINT)
+    return issues
+
+
 def init_db() -> None:
     if _postgres():
         # PostgreSQL schema and seed data are migrated explicitly (never altered implicitly at startup).
@@ -107,11 +129,13 @@ def init_db() -> None:
             _execute(con, "SELECT 1 FROM employees LIMIT 1", one=True)
             present = _execute(con, """SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name IN ('user_accounts', 'user_sessions')""", all_rows=True)
+            role = _execute(con, "SELECT rolsuper FROM pg_roles WHERE rolname = current_user", one=True)
         if len(present) != len(AUTH_TABLES):
             raise RuntimeError(
                 "Authentication tables are missing in PostgreSQL. Run: python backend/migrations/004_auth_tables.py "
                 "(with PYTHONPATH set to the project root)."
             )
+        enforce_role_policy(app_is_superuser=bool(role and role["rolsuper"]))
         return
     with _conn() as c:
         c.executescript("""

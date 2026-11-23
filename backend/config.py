@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     # /health database probe: short connect + statement timeout (seconds) so a dead DB never hangs it.
     # libpq treats connect timeouts below 2 s as 2 s.
     health_db_timeout_seconds: int = 3
+    # Server-side statement timeout for application (read-write) connections; 0 disables it.
+    pg_statement_timeout_ms: int = 10000
+
+    # SQL-agent / read-only data access (see backend/services/readonly_query.py).
+    # PG_READER_USER is the least-privilege SELECT-only role created by
+    # backend/migrations/005_least_privilege_roles.py. When it is empty, read-only queries fall back to
+    # the application credentials, still inside READ ONLY transactions with the timeout and row limit.
+    pg_reader_user: str = ""
+    pg_reader_password: str = ""
+    # HMAC secret for the signed employee scope checked by row-level security (same value that
+    # migration 005 stored in onboardai_private.scope_key). Required when PG_READER_USER is set.
+    pg_scope_secret: str = ""
+    sql_agent_statement_timeout_ms: int = 5000
+    sql_agent_max_rows: int = 200
 
 
 settings = Settings()

@@ -51,6 +51,19 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     return JSONResponse(status_code=422, content={"detail": detail})
 
 
+DATABASE_TIMEOUT = "The database took too long to respond. Please try again."
+
+
+async def query_timeout_handler(request: Request, exc: Exception):
+    # No SQL text or parameters in the log or the response.
+    logger.warning("request_id=%s database query timed out on %s %s",
+                   getattr(request.state, "request_id", "-"), request.method, request.url.path)
+    return JSONResponse(status_code=503, content={"detail": DATABASE_TIMEOUT}, headers={"Retry-After": "5"})
+
+
 def install(app: FastAPI) -> None:
+    from backend.services.readonly_query import QueryTimeoutError
+
     app.add_middleware(RequestLoggingMiddleware)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+    app.add_exception_handler(QueryTimeoutError, query_timeout_handler)
