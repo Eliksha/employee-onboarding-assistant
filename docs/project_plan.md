@@ -7,7 +7,7 @@
 **Mentor:** Shankhalika Sarkar  
 **Last updated:** 23 November 2026
 
-**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED and MANUALLY VERIFIED (local Docker stack, 23 November 2026); ready to commit after owner review.
+**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026); milestones M3-M5 proposed, awaiting owner approval.
 
 ## 1. Milestones
 
@@ -123,7 +123,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 
 ## 10. Next Immediate Step
 
-**Next:** Commit Phase 1 hardening and Phase 2A/2B (owner approval required; see "Version control readiness" at the end of this file). Then decide on Step 2C (LLM synthesis over typed evidence) or vocabulary extensions from real questions. Azure milestones (A1 onward) remain ON HOLD.
+**Next:** Owner review of the Phase 3 audit ("Phase 3 - Architecture Completion Audit", end of this file) and approval of milestone M3 (engineering and evaluation baseline), then M4 (data and document ingestion) and M5 (user workflow and data integrity). Azure milestones (A1 onward) remain ON HOLD.
 
 ### PostgreSQL Dependency Update — 20 November 2026
 
@@ -1156,3 +1156,181 @@ Review of all uncommitted changes (Phase 1 least-privilege roles, signed employe
 - Not in the repository / ignored: `.env`, `data/*.db` (including backups), `data/index/*`, `logs/`, `frontend/dist/`, `node_modules/`, caches. The database backup (`onboardai_local_backups/`) and the secrets file (`onboardai_secrets/phase1.env`) are outside the repository. Temporary validation scripts stayed in the session scratch directory.
 - `git diff --check`: clean after two whitespace fixes (trailing spaces in this file, blank line at end of `backend/services/db_roles.py`).
 - Tests at commit time: backend 445 passed (+77 live-PostgreSQL tests passed on a disposable server), frontend 8/8, lint clean.
+
+
+---
+
+## Phase 3 - Architecture Completion Audit (23 November 2026)
+
+**Scope:** read-only audit of code, configuration, database structure, tests and documentation at commit `99d1c30` (branch `dev`, in sync with `origin/dev`). Only this file was changed. No application code, database, Docker container or Git history was modified. **Azure integration and deployment remain ON HOLD**; Groq remains the temporary LLM provider.
+
+**Evidence sources:** source files and tests (cited inline); read-only checks of `data/index` (FAISS `ntotal` and chunk metadata) and `data/raw/handbook.pdf` (text extraction only); `curl` of the running stack (`/api/docs`, `/api/openapi.json`, `/api/checklist` without a session); request timings read from the running backend's log file (no question text is logged). The full test suite was not re-run: the last full run at `99d1c30` was 445 passed + 77 live-PostgreSQL tests.
+
+**Requirement sources:** no EY capstone requirement document exists in the repository. The sources available are `docs/problem_statement.md` (project-authored MVP scope and success criteria), the milestone table in section 1 of this file, and the hybrid architecture described in the Phase 1 audit (A1). Mandatory capstone requirements are therefore marked **UNVERIFIED** below.
+
+### P3-A. Architecture completion matrix
+
+Status: **COMPLETE** = implemented with sufficient evidence; **PARTIAL** = implemented but missing required behaviour or validation; **MISSING** = no implementation found.
+
+| # | Component | Status | Existing implementation | Evidence | Missing work | Priority |
+|---|---|---|---|---|---|---|
+| 1 | CSV -> PostgreSQL ingestion | MISSING | Data comes from hard-coded seeds | `docker/postgres/02_seed.sql`, `backend/migrations/002_seed_demo_data.py`; no `.csv` file and no CSV/`COPY` code in the repository | Validated, idempotent, transactional importer with dry run and error report | P1 |
+| 2 | PostgreSQL schema and integrity | PARTIAL | 12 tables, PKs, FKs on employee tables, CHECK constraints, UNIQUE (employee_id, leave_type) | `docker/postgres/01_schema.sql`, `03_auth_schema.sql`, `tests/unit/test_docker_config.py` | No FK on `messages.employee_id` or `feedback.message_id`; `escalations` has no `employee_id`; dates stored as `text` | P1 (FKs), P2 (date types) |
+| 3 | Schema dictionary | MISSING | Table/column inventory exists only as documentation (Phase 1 audit A2) | No metadata module; `information_schema` used only for table-existence checks (`db.py::init_db`, migration 004) | Curated machine-readable dictionary (tables, columns, types, keys, relationships, descriptions, allowed reader tables), with a test that it matches the live schema | P1 |
+| 4 | SQL access layer (approved tools) | COMPLETE | Closed allow-list of 6 read operations, bound parameters, read-only reader role, pglast validation, timeout, 200-row cap, signed scope + RLS | `employee_query_router.py::ALLOWED_OPERATIONS`, `COMPANY_OPERATIONS`, `execute_employee_query`; `readonly_query.py::assert_select_only`, `fetch_readonly`; `employee_scope.py`; `tests/unit/test_readonly_query.py` (103), `tests/integration/test_postgres_roles.py` (77) | - | - |
+| 5 | Constrained text-to-SQL agent | MISSING (by design) | Safety infrastructure for it already exists (validator, reader role, RLS) | No LLM-generated SQL anywhere | Only if the requirement is confirmed; never unrestricted | P2 (requirement UNVERIFIED) |
+| 6 | PDF ingestion | PARTIAL | `_read_pdf` (pypdf) exists | `ingest.py::load_chunks` skips a PDF when a same-name `.md` exists; current index has **0 PDF chunks** (48 chunks: `faqs.md` 25, `handbook.md` 23); `handbook.pdf` has 3 pages of extractable text (5,158 characters, so no OCR needed) | PDF as a first-class source with page numbers and section detection; duplicate-document handling; tests on a real PDF | P1 |
+| 7 | OCR fallback | MISSING | - | No OCR code or dependency | Not needed for the current text-based PDF; optional | P2 |
+| 8 | Chunking and metadata | PARTIAL | Heading-aware Markdown chunks (350 words, 40 overlap), FAQ Q/A chunks, source + section | `ingest.py::chunk_markdown_handbook`, `chunk_faqs`, `_split_long`; `tests/unit/test_ingest.py` (3) | Page numbers, document hash/version; PDF chunks would be labelled only "PDF text" | P1 (with #6) |
+| 9 | Embeddings | COMPLETE | fastembed `BAAI/bge-small-en-v1.5`, normalised, baked into the image | `embeddings.py::embed_texts`, `Dockerfile`; rag_eval A05 | - | - |
+| 10 | FAISS index lifecycle | PARTIAL | `IndexFlatIP` built and saved; lazy load; admin `POST /ingest` | `ingest.py::build_index`, `retriever.py::_ensure_loaded`, `routes/admin.py::reindex`; `tests/unit/test_retriever.py` (1) | Non-atomic write (index then JSON; a failure leaves them out of sync); no vector/metadata count check on load; the request path builds the index if it is missing; in Docker `data/index` is mounted `:ro`, so `POST /ingest` cannot work there (not executed in this audit) | P1 |
+| 11 | Document-level access restrictions | MISSING (not required today) | All documents are company-wide policy | - | Needed only if restricted documents are added | P2 |
+| 12 | RAG retrieval, grounding and guardrails | COMPLETE | Evidence gate (0.65 + corroborated 0.60-0.65 band), untrusted-context wrapping, NOT_FOUND rule, citation/number/email/leak validation, fallback | `guardrails.py`, `rag.py::answer_policy`, `llm.py::generate_answer`; `tests/unit/test_guardrails.py` (25); `docs/rag_eval_report.md` | Grounding check is lexical: paraphrased unsupported claims could pass (documented) | P2 |
+| 13 | Citations with page references | PARTIAL | Cited sources as file + section (+ score); records labelled `Your records` / `Company records` | `guardrails.py::map_citation`, `orchestrator.py::RECORD_LABELS`, `frontend/src/format.js::formatSources` | No page numbers (blocked by #6) | P1 (with #6) |
+| 14 | Conflicting policy information | MISSING | - | No conflict detection; one synthetic handbook, so no conflicts exist today | Only relevant with multiple document versions; document-version metadata covers it | P2 |
+| 15 | LLM provider and failure handling | PARTIAL | Groq through the OpenAI client, 30 s timeout, 2 retries, `LLMUnavailable` -> 503 (handbook-only) or records + note (mixed) | `llm.py::_client`, `routes/chat.py::chat`, `orchestrator.py::_policy_part`; tests in `test_error_handling.py`, `test_hybrid_chat.py` | Azure OpenAI provider (**ON HOLD**) | P1, ON HOLD |
+| 16 | Intent routing (SQL / RAG / mixed) | COMPLETE | Deterministic clause router with precedence rules P1-P5, ambiguity default, topic inheritance, third-party refusal | `employee_query_router.py::route`, `classify_clause`; `tests/unit/test_intent_router.py` (91) | Accuracy never measured on a held-out question set (see P3-E) | P1 (measurement) |
+| 17 | Hybrid orchestration | COMPLETE | Records-only, handbook-only and mixed flows; one saved message per chat; partial-failure handling | `orchestrator.py::answer_question`, `_records_part`, `_policy_part`; `tests/unit/test_orchestrator.py` (36), `tests/integration/test_hybrid_chat.py` (13); clone checks 23/23 + 5/5; owner manual verification | Shared LLM synthesis (step 2C) not built: answers are composed in two sections | P2 (requirement UNVERIFIED) |
+| 18 | Chat history persistence | COMPLETE | Exactly one row per chat, per employee, history endpoint | `db.save_employee_message`, `routes/chat.py::history`; persistence-count tests in `test_hybrid_chat.py` | FK on `messages.employee_id` (see #2) | P1 (with #2) |
+| 19 | Authentication and sessions | COMPLETE | Argon2id, server-side hashed session tokens, absolute and idle expiry, rate limiting, generic errors | `services/auth.py`, `security.py`, `routes/auth.py`; `tests/integration/test_auth.py` (62) | In-memory rate limiter; no MFA or password reset (out of MVP scope) | P2 |
+| 20 | Authorization, CSRF and employee isolation | COMPLETE | Session-derived employee, 403 on mismatch, admin role, CSRF on all writes; DB-level RLS with signed scope | `security.py::assert_own_employee`, `csrf_protected`, `require_admin_write`; `tests/integration/test_isolation_security.py` (34), `test_postgres_roles.py` | - | - |
+| 21 | Secrets and configuration | PARTIAL | `.env` git-ignored; owner-only secrets file outside the repo; no secrets in images; leak checks | `docker-compose.yml`, `.env.example`, `tests/unit/test_docker_config.py`; secrets file per runbook section 9 | Weak 11-character owner DB password (rotation deferred); public `/api/docs` and `/api/openapi.json` (verified 200); no HTTP security headers in `frontend/nginx.conf` | P1 (password rotation), P2 (rest) |
+| 22 | API, validation and error handling | COMPLETE | Pydantic models, readable 422s, safe 500 JSON with request ID, 503 for LLM and DB timeouts | `schemas/models.py`, `middleware/__init__.py`; `tests/integration/test_error_handling.py` (16), `test_middleware.py` (3) | - | - |
+| 23 | Logging, audit trail and monitoring | PARTIAL | Request-ID logs with timings, rotating file log, route kind logged without question text | `logging_config.py`, `middleware/__init__.py::RequestLoggingMiddleware`, `orchestrator.py` (`chat route` line) | No metrics endpoint or dashboard, no audit log for security events beyond login logs, no alerting | P2 (Azure monitoring is ON HOLD) |
+| 24 | Health checks | COMPLETE | `/health` checks the DB; Docker health checks with dependency ordering | `main.py::health`, `Dockerfile` `HEALTHCHECK`, `docker-compose.yml`; `tests/unit/test_health.py` (10) | Does not report index or LLM readiness (by design: public endpoint) | P2 |
+| 25 | DB connection management | PARTIAL | Connection timeouts and statement timeouts | `postgres.py::postgres_connection`, `postgres_readonly_connection` | A new connection per query (no pool); scoped reads add signing round trips; adequate at capstone scale | P2 |
+| 26 | React frontend | PARTIAL | Login, dashboard, chat with sources, checklist toggle, leave/payroll, assets, support tickets | `frontend/src/App.jsx` (313 lines, single file), `LoginPage.jsx`, `api.js`; `pages/`, `components/`, `services/`, `layouts/` are empty | No feedback (thumbs) UI and no escalate action in chat, although the API exists (`/feedback`, `/escalate`) and the fallback text tells users to "use the escalate option"; escalation is possible only through the Support Center ticket form | P1 |
+| 27 | Feedback and escalation backend | PARTIAL | `POST /feedback` (owner check), `POST /escalate` (simulated) | `routes/feedback.py` | Escalations are not linked to an employee; `/escalate` overlaps tickets | P1 (with #26) |
+| 28 | Docker packaging | COMPLETE | Non-root image, baked embedding model, health checks, localhost-only ports, opt-in least-privilege roles | `Dockerfile`, `docker-compose.yml`, `frontend/Dockerfile`, `frontend/nginx.conf`; `tests/unit/test_docker_config.py` (7) | Re-index path in Docker (see #10) | P1 (with #10) |
+| 29 | CI/CD | MISSING | - | `.github/workflows/` contains only `.gitkeep` | Pipeline for pytest, frontend test/lint/build and image build (deployment ON HOLD) | P1 |
+| 30 | Dependency management | PARTIAL | 3 of 16 requirements pinned | `requirements.txt` (fastapi, openai, faiss-cpu, fastembed etc. unpinned; pytest, httpx, locust in the runtime image) | Pin versions; split runtime and test requirements | P1 |
+| 31 | Automated tests | PARTIAL | 445 backend + 77 live-PostgreSQL + 8 frontend tests | test files listed above | Thin ingestion/retrieval tests (4); no load tests (`tests/load/` empty); no browser E2E in the repository | P1 |
+| 32 | Evaluation metrics | PARTIAL | RAG evaluation harness | `scripts/rag_eval.py`, `docs/rag_eval_report.md` (20 Nov 2026) | Not re-run after Phases 1-2; no routing, mixed-answer, latency or fallback-rate metrics (see P3-E) | P1 |
+| 33 | Azure deployment | MISSING | - | - | **ON HOLD** (documented blocker) | ON HOLD |
+
+### P3-B. Gap analysis
+
+**P0 - Critical: none found.** No security vulnerability, data-isolation failure or data-corruption path was found in the current code. Employee isolation is enforced twice (session authorization and database RLS with a signed scope) and covered by automated and manual tests.
+
+**P1 - Important**
+
+| ID | Finding | Impact | Smallest safe correction |
+|---|---|---|---|
+| G1 | No CSV -> PostgreSQL import (#1) | Documented architecture input missing; data changes need hand-written SQL | Admin CLI importer `scripts/import_csv.py`: per-file schema validation, all-or-nothing transaction, upsert on natural keys (idempotent), dry run by default, row-level error report. It must **not** run as `onboardai_app`, which is (correctly) SELECT-only on the reference tables since Phase 1 (`db_roles.APP_PRIVILEGES`); use a dedicated import role or the owner account through the migration-005 admin pattern (owner decision) |
+| G2 | No schema dictionary (#3) | SQL path not self-describing; prerequisite for any future text-to-SQL; docs drift | `backend/services/schema_dictionary.py` (curated descriptions) + test comparing it with `01_schema.sql`/SQLite DDL and `db_roles.READER_TABLES` |
+| G3 | PDF not indexed, no page citations (#6, #8, #13) | The project brief describes PDF RAG, but retrieval actually runs on `handbook.md`; answers are equivalent today because both files hold the same content, but the PDF path is untested | Page-aware PDF chunking (page + heading detection), PDF preferred or both with de-duplication by content hash, `page` in sources, re-run rag_eval |
+| G4 | Fragile index lifecycle (#10, #28) | A failed rebuild can leave the index and metadata out of sync; `/ingest` cannot work in Docker; the first request may try to build an index | Write to temporary files then atomic rename; check `ntotal == len(chunks)` on load; never build on the request path; document a host-side rebuild command (or a writable index volume) |
+| G5 | Feedback and escalation not usable from the UI (#26, #27) | MVP item 4 ("escalate-to-HR/IT option") only reachable through the ticket form; the fallback text points to a non-existent button | Thumbs up/down and "Escalate" actions on each answer using the existing endpoints; escalation creates a ticket for the session employee (or `/escalate` stores `employee_id`) |
+| G6 | Missing FKs and escalation attribution (#2, #18, #27) | Orphaned feedback/messages possible; escalations cannot be traced | Migration 006: FKs `messages.employee_id -> employees`, `feedback.message_id -> messages`, nullable `escalations.employee_id`; pre-check for orphan rows; update `db_roles` grant map |
+| G7 | No CI (#29) | Problem statement success criterion "CI passing" unmet; regressions rely on manual runs | GitHub Actions: backend pytest (SQLite), live-PostgreSQL suite against a service container, `npm test/lint/build`, `docker build` (no push, no deployment) |
+| G8 | Unpinned dependencies (#30) | Non-reproducible builds; test tools shipped in the runtime image | Pin from the current working environment; `requirements-dev.txt` for pytest/httpx/locust |
+| G9 | Evaluation not current (#16, #32) | Success criteria (80% in-scope accuracy, 100% out-of-scope fallback, < 5 s) not re-measured after Phases 1-2; routing accuracy never measured | Extend `scripts/rag_eval.py` with a held-out labelled routing set, mixed questions, latency and fallback/error rates; record results |
+| G10 | Weak owner DB password (#21) | Owner account protected by an 11-character password (local only, not published) | Rotate per runbook section 9 (owner action, no code change) |
+
+**P2 - Optional**
+
+| ID | Finding | Smallest safe correction |
+|---|---|---|
+| O1 | Public API docs and schema; no security headers | Disable docs when `APP_ENV=production`; add CSP / X-Frame-Options / X-Content-Type-Options / Referrer-Policy in nginx |
+| O2 | Shared LLM synthesis for mixed answers (step 2C) | Only if required; typed evidence, records as untrusted data, numbers validated against rows |
+| O3 | Constrained text-to-SQL | Only if confirmed mandatory; reuse `assert_select_only`, reader role, RLS and the schema dictionary |
+| O4 | Dates stored as text | Migration to `date`/`timestamptz` when date filtering is needed |
+| O5 | Connection pooling; persistent rate limiting; MFA/password reset | Production hardening (Azure phase) |
+| O6 | OCR, document-level ACLs, conflict detection | Only when scanned or restricted documents exist |
+| O7 | Third-party detection is pattern-based | Extend patterns from real questions; no data exposure possible (RLS) |
+| O8 | Single-file `App.jsx`; legacy SQLite path, `/checklist` route, `checklist.done`, unused helpers | Refactor/remove after the core milestones |
+| O9 | Monitoring/metrics/alerting | Azure Monitor / Application Insights when Azure resumes (ON HOLD) |
+
+### P3-C. Requirements traceability
+
+| Requirement | Source | Category | Status |
+|---|---|---|---|
+| RAG chatbot over approved handbook with source references | `docs/problem_statement.md` MVP 1-4 | 2. Project-documented (mandatory status UNVERIFIED) | COMPLETE (Markdown source) |
+| Safe fallback and escalate-to-HR/IT option | problem statement MVP 4 | 2 | PARTIAL - fallback complete; escalation only via ticket form (G5) |
+| Onboarding checklist Day 1 / Week 1 / Month 1 | problem statement MVP 5 | 2 | COMPLETE (per employee, persisted) |
+| >= 80% in-scope correct with source; 100% out-of-scope fallback | problem statement success criteria | 2 | Measured 20 Nov 2026 before Phases 1-2 (see P3-E); re-measurement needed (G9) |
+| Typical response < 5 s | problem statement | 2 | Indicative only (8 chats, see P3-E); not formally measured |
+| Containerised; deployed or documented blocker + local run; CI passing; test results recorded | problem statement | 2 | Containerised COMPLETE; deployment = documented blocker (Azure ON HOLD); **CI MISSING** (G7) |
+| Docker, Azure deployment, CI/CD, unit/integration/load/security tests; runbook, diagrams, slides, demo | section 1 milestones M4-M5 | 1. Likely programme requirements - **UNVERIFIED** (no EY document in repo) | Docker/tests/runbook/diagrams/demo done; load tests, CI/CD, slides missing; Azure ON HOLD |
+| CSV -> PostgreSQL; schema dictionary; text-to-SQL **or** approved tools; PDF -> FAISS; shared generator; mixed queries; Azure OpenAI | Hybrid architecture (Phase 1 audit A1) | 2. Project architecture | Approved tools, mixed queries COMPLETE; CSV, schema dictionary MISSING; PDF PARTIAL; shared generator not built (O2); Azure ON HOLD |
+| Authentication, least-privilege DB, signed scope, RLS | Phase 1 decisions | 3. Engineering improvements (beyond MVP: login was out of scope in the problem statement) | COMPLETE |
+| Pinned deps, atomic index, FKs, security headers, eval metrics | This audit | 3 | Proposed |
+| LLM synthesis, text-to-SQL, OCR, ACLs, pooling, MFA, UI refactor | This audit | 4. Optional | Deferred |
+
+Note: the problem statement lists "admin upload page" and "Login/SSO" as out of scope, so CSV/PDF ingestion can remain CLI/admin-API driven without an upload UI.
+
+### P3-D. Security and reliability risks
+
+| Risk | Type | Severity | Status |
+|---|---|---|---|
+| Cross-employee data access | Security | - | Mitigated (session authz + RLS + signed scope; 77 + 43 attack checks) |
+| SQL injection / unsafe SQL | Security | - | Mitigated (bound parameters, allow-list, pglast validator, read-only reader role) |
+| Prompt injection / leakage | Security | Low | Mitigated (untrusted-context wrapping, NOT_FOUND rule, leak check incl. Phase 1 secrets); lexical grounding limits remain |
+| Weak owner DB password | Security | Medium (local) | Open (G10) |
+| Public API docs, missing security headers | Hardening | Low | Open (O1) |
+| Index/metadata desync on failed rebuild; Docker re-index impossible | Reliability | Medium | Open (G4) |
+| Unpinned dependencies, no CI | Reliability | Medium | Open (G7, G8) |
+| Orphan rows (no FKs) | Data integrity | Low | Open (G6) |
+| LLM outage | Reliability | - | Handled (503 for handbook-only; records preserved for mixed) |
+| In-memory rate limiter, connection-per-query | Scalability | Low (single instance) | Accepted for local release (O5) |
+
+### P3-E. Metrics: measured vs proposed
+
+**Measured (do not extrapolate):**
+- RAG evaluation 20 Nov 2026 (`docs/rag_eval_report.md`, Groq `qwen/qwen3.8-27b`, same 48-chunk index): index checks 6/6, retrieval relevance 17/17 (MRR 0.971 for the expected section), answer grounding 17/17, unknown-question fallback 7/7, prompt injection 3/3. Taken **before** Phases 1-2; not re-run since.
+- Day 32 question set (`docs/test_report.md`): 15/15 auto-checked.
+- Routing: 91 router unit tests pass. These are design-time regression cases written with the router, **not** an unbiased accuracy measurement.
+- `/chat` latency from the running backend's request log (23 Nov 2026, manual testing, mixed backend versions, all kinds pooled): n = 8 successful chats, min 84 ms, median 164 ms, p90 1,888 ms, max 2,704 ms. Indicative only (tiny sample, not split by route kind).
+
+**Proposed (not yet measured):** intent/routing accuracy and macro-F1 on a held-out labelled set (records / handbook / mixed, plus third-party refusals); SQL routing accuracy per intent; retrieval hit@k and MRR re-run on the current stack; answer groundedness and citation correctness for handbook and mixed answers; end-to-end latency p50/p95 per route kind; fallback rate on in-scope questions (target low) and out-of-scope questions (target 100%); error rate (5xx) under a small load test.
+
+### P3-F. Accelerated implementation roadmap
+
+Three milestones complete the core architecture; everything else is deferred. Recommended order: M3 first, because CI, pinned dependencies and the evaluation harness protect and measure M4 and M5.
+
+**M3 - Engineering and evaluation baseline** (Complexity: **Low-Medium**)
+- Objective: reproducible builds, automated regression on every push, measured baseline metrics.
+- Reuse: existing pytest suites, `scripts/rag_eval.py`, `tests/integration/test_postgres_roles.py` (disposable-server pattern), `tests/load/` (empty) with `locust` (already a dependency).
+- Implement: pin `requirements.txt` from the working environment and add `requirements-dev.txt`; GitHub Actions workflow (backend pytest, live-PostgreSQL suite with a `postgres:16` service container, frontend `npm ci`/test/lint/build, `docker build` without push); extend `rag_eval` with a held-out labelled routing set (about 60 questions, written separately from the router tests), mixed-answer checks, latency p50/p95 per route kind and fallback/error rates; a small locust scenario (local only).
+- Affected files: `requirements.txt`, new `requirements-dev.txt`, `Dockerfile` (runtime requirements only), new `.github/workflows/ci.yml`, `scripts/rag_eval.py`, new `tests/eval/routing_set.json` (or similar), `tests/load/locustfile.py`, `docs/rag_eval_report.md`.
+- Security: CI uses no real secrets (LLM mocked; live LLM evaluation runs locally only); throw-away PostgreSQL passwords generated per job.
+- Acceptance: CI green on `dev`; image builds with pinned versions; evaluation report records the measured metrics above with dates and model.
+- Tests: CI runs all existing suites; evaluation script unit tests (`tests/unit/test_rag_eval.py` extended).
+- Manual: one local `python -m scripts.rag_eval` with Groq; review the report.
+- Migrations: none. Docker rebuild: yes (pinned dependencies; verify on a clone first). Blocking: GitHub Actions availability on the repository.
+
+**M4 - Data and document ingestion completion** (Complexity: **Medium-High**)
+- Objective: CSV -> PostgreSQL import, schema dictionary, page-aware PDF ingestion and a robust index lifecycle.
+- Reuse: the migration-005 admin-connection pattern (`PG_ADMIN_*`), `employee_db` table shapes, `db_roles.READER_TABLES`, `ingest.py` chunkers, `embeddings.py`, `rag_eval`.
+- Implement: `scripts/import_csv.py` (employees, leave balances, assets, checklist assignments, payroll calendar; header/type/FK validation, dry run by default, single transaction, upsert on natural keys, row-level error report, no deletes unless explicitly requested); synthetic `data/csv/*.csv` matching the current seed; `backend/services/schema_dictionary.py` with a consistency test; PDF chunking by page and heading with `page` metadata, content-hash de-duplication between `handbook.pdf` and `handbook.md` (one canonical source, chosen explicitly), atomic index write, count check on load, no index build on the request path, documented host-side rebuild (`python -m backend.services.ingest`) plus backend restart; `page` shown in sources (`format.js`).
+- Affected files: new `scripts/import_csv.py`, `data/csv/`, new `backend/services/schema_dictionary.py`, `backend/services/ingest.py`, `retriever.py`, `guardrails.py::map_citation` (page-aware citations), `rag.py` (source fields), `frontend/src/format.js`, `docs/runbook.md`, tests.
+- Security: the running application's roles are **not** widened (`onboardai_app` stays SELECT-only on reference tables). Recommended: a dedicated `onboardai_importer` role (INSERT/UPDATE on `employees`, `leave_balances`, `assets`, `checklist_assignments`, `payroll_calendar` only; no DELETE, no auth tables, no BYPASSRLS; RLS policy for it), used only by the manual CLI, with credentials from the external secrets file. Alternative: run the CLI with the owner account like migration 005. CSV values are bound parameters; no secrets in CSVs; PDF text stays wrapped as untrusted context.
+- Acceptance: importing the same CSVs twice yields identical tables (idempotent); invalid rows are reported and nothing is committed; schema dictionary test passes; index contains PDF chunks with page numbers; rag_eval retrieval and grounding at least as good as the M3 baseline; citations show the page.
+- Tests: importer unit tests (valid, duplicate, bad header, bad type, unknown employee FK, partial failure rollback); live-PostgreSQL importer tests (import role succeeds; app and reader roles are still denied writes); ingestion tests on the real PDF (page metadata, de-duplication, atomic write, count mismatch detection); `ChatResponse` contract test with the new optional source field.
+- Manual: dry-run import on a clone; rebuild the index on the host; ask 5 policy questions and check page citations.
+- Migrations: **yes if the dedicated import role is chosen** (role + grants + RLS policy, through the `db_roles` plan/verify pattern; no table changes); none if the owner-run option is chosen. Docker rebuild: yes (backend + frontend); index rebuild on the host. Blocking: owner decisions on (a) import role vs owner-run CLI, (b) the canonical handbook source (PDF vs Markdown), (c) an optional `page` field on `ChatResponse.sources` items (additive, backward-compatible).
+
+**M5 - User workflow completion and data integrity** (Complexity: **Medium**)
+- Objective: feedback and escalation usable from chat; referential integrity; low-risk hardening.
+- Reuse: `/feedback` and ticket endpoints, `security.py` dependencies, migration 005 pattern (dry run / verify / apply, clone validation).
+- Implement: thumbs up/down and "Escalate to HR/IT" on each answer (escalation creates a ticket for the session employee with the question as description, or `/escalate` gains `employee_id`); fallback text aligned with the UI; migration 006 (FKs on `messages.employee_id` and `feedback.message_id`, `escalations.employee_id`, orphan pre-check, grant map update); disable `/docs` and `/openapi.json` outside development; nginx security headers.
+- Affected files: `frontend/src/App.jsx`, `frontend/src/api.js`, `backend/routes/feedback.py`, `backend/services/db.py`, `docker/postgres/01_schema.sql`, new `backend/migrations/006_integrity_constraints.py`, `backend/services/db_roles.py`, `backend/main.py`, `frontend/nginx.conf`, `rag.py::FALLBACK`, docs.
+- Security: escalation and feedback stay CSRF-protected and owner-checked; FKs must not break RLS policies; migration validated on a clone with a backup first.
+- Acceptance: a user can rate and escalate any answer; escalations are attributable; no orphan rows possible; docs endpoints return 404 in the Docker profile; security headers present; all suites green in CI.
+- Tests: route tests for feedback/escalation ownership and CSRF; migration dry-run/apply/verify tests (SQLite + live PostgreSQL); header and docs-disabled tests; frontend unit tests for the new actions.
+- Manual: browser check of rate/escalate flows for EMP001 and EMP002; verify that EMP002 cannot see EMP001's escalation ticket.
+- Migrations: **yes (006)**, with backup and clone validation. Docker rebuild: yes (backend + frontend). Blocking: none.
+
+**Deferred / ON HOLD (separate approval):** Azure OpenAI provider and Azure deployment (ON HOLD); owner DB password rotation (owner action, can happen any time); LLM synthesis of mixed answers (2C); constrained text-to-SQL (only if the requirement is confirmed); OCR; document ACLs; date-type migration; connection pooling; persistent rate limiting; MFA/password reset; frontend refactor; SQLite/legacy removal; monitoring.
+
+### P3-G. Components that should remain unchanged
+
+Authentication, sessions, CSRF and authorization (`auth.py`, `security.py`); Phase 1 database security (`db_roles.py`, migration 005, `employee_scope.py`, `readonly_query.py`, RLS policies); the deterministic router and orchestrator contracts (`employee_query_router.route`, `orchestrator.answer_question`); RAG guardrails and evidence gate (`guardrails.py`); the `ChatResponse` contract (additive optional fields only); Docker topology and the least-privilege compose variables; the external secrets file process.
+
+### P3-H. Development workflow for approved milestones
+
+1. Audit the existing implementation before coding. 2. Reuse verified components. 3. Implement related changes together. 4. Run targeted tests during development. 5. Run the full regression and security suites at milestone completion. 6. Validate risky changes (migrations, ingestion, image changes) on a temporary clone. 7. Focused manual verification before release. 8. Update documentation and this file. 9. One consolidated milestone report with the changed-file list and a recommended commit message; **all Git staging, commits and pushes are performed by the owner**.
+
+### P3-I. Status of this audit
+
+No application code, database records or schema, Docker containers or Git history were modified; no migration was run; no dependency was added. Only `docs/project_plan.md` was updated (this section, the status line and the next-step line). Implementation of M3-M5 awaits owner approval.
