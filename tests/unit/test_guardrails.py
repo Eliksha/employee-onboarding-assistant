@@ -201,3 +201,20 @@ def test_faq_back_reference_used_when_section_not_retrieved():
     faq_only = [h for h in HITS if h["source"] == "faqs.md"]
     v = guardrails.validate_answer("8 per calendar year [Handbook 2.1].", faq_only)
     assert v.ok and [p["section"] for p in v.sources] == ["FAQ: How many casual leaves do I get?"]
+
+
+# ---------------------------------------------------------------- Phase 2A: leak check covers Phase 1 secrets
+@pytest.mark.parametrize("name", ["groq_api_key", "pg_password", "pg_reader_password", "pg_scope_secret"])
+def test_leak_check_covers_every_configured_secret(monkeypatch, name):
+    secret = f"Synthetic-{name}-Value-0123456789abcdef"
+    monkeypatch.setattr(settings, name, secret)
+    reasons = guardrails.leak_reasons(f"Here you go: {secret} [Handbook 2.1]")
+    assert f"secret_leak:{name}" in reasons
+    assert all(secret not in r for r in reasons)
+    assert guardrails.validate_answer(f"8 casual leaves {secret} [Handbook 2.1]", _hits()).ok is False
+
+
+def test_leak_check_ignores_unset_or_short_secrets(monkeypatch):
+    monkeypatch.setattr(settings, "pg_reader_password", "")
+    monkeypatch.setattr(settings, "pg_scope_secret", "abc")
+    assert guardrails.leak_reasons("abc is fine [Handbook 2.1]") == []

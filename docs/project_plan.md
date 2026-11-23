@@ -5,7 +5,9 @@
 **Team member:** Eliksha Maheshwari  
 **Location:** Pune  
 **Mentor:** Shankhalika Sarkar  
-**Last updated:** 21 November 2026
+**Last updated:** 23 November 2026
+
+**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED and MANUALLY VERIFIED (local Docker stack, 23 November 2026); ready to commit after owner review.
 
 ## 1. Milestones
 
@@ -22,10 +24,10 @@
 - **Backend:** Python, FastAPI, explicit deterministic agent orchestrator.
 - **AI:** Retrieval-augmented generation over onboarding/policy content, using embeddings and FAISS. Azure OpenAI is the **target** LLM service; Groq was used temporarily during development and must be replaced before Azure completion.
 - **Frontend:** React + Vite, connected to the FastAPI backend.
-- **Prototype persistence:** SQLite at `data/app.db`.
+- **Persistence:** PostgreSQL 16 (Docker stack and local development); SQLite remains only for the automated test suite and legacy local runs. Least-privilege database roles and row-level security are implemented in code (Phase 1 hardening, end of this file); applying them to the running database is pending approval.
 - **Cloud target:** Azure only for the final solution. Production persistence, hosting, identity, secrets management, and monitoring require configuration and validation.
-- **Data:** Synthetic fictional employees only; demo selectors EMP001, EMP002, EMP003.
-- **Authentication:** Not implemented in the demo. An employee selector is **not** an authentication or authorization mechanism. Do not expose employee-specific APIs with real data or deploy them publicly without proper identity and access controls.
+- **Data:** Synthetic fictional employees only (EMP001, EMP002, EMP003). The original employee selector was replaced by sign-in; the employee is always taken from the session.
+- **Authentication:** Implemented locally (21-22 Nov 2026): email/password with Argon2id hashing, server-side sessions in an HttpOnly cookie with absolute and idle expiry, CSRF tokens on all writes, per-email and per-IP login rate limiting, `employee`/`admin` roles. Every employee route serves only the signed-in employee's own records. Not implemented: MFA, password reset, external identity provider (Microsoft Entra ID is a possible later change), persistent rate limiting, HTTPS.
 
 ## 3. Implementation Progress
 
@@ -63,9 +65,9 @@
 
 ## 4. Remaining Work â€” Prioritized
 
-1. **Security readiness:** Determine the identity approach for Azure deployment (e.g., Microsoft Entra ID), enforce backend authorization, protect ingestion/admin endpoints, verify RBAC and secret handling. Keep synthetic-only, access-controlled demo if authentication remains out of scope.
-2. **Azure OpenAI integration:** Replace temporary Groq usage; configure model deployments and environment variables securely; verify RAG answer quality, grounding, and fallback behavior.
-3. **Azure infrastructure:** Confirm subscription, permissions, region, quotas, resource availability, deployment architecture, and production database choice.
+1. **Security readiness:** Local authentication, authorization, CSRF and RBAC are implemented and tested; least-privilege PostgreSQL roles with row-level security are implemented and activated (23 November 2026). Remaining: decide the identity approach for Azure, HTTPS, secret storage (Key Vault / managed identity), persistent login rate limiting, Docker owner password rotation.
+2. **[ON HOLD] Azure OpenAI integration:** Replace temporary Groq usage; configure model deployments and environment variables securely; verify RAG answer quality, grounding, and fallback behavior.
+3. **[ON HOLD] Azure infrastructure:** Confirm subscription, permissions, region, quotas, resource availability, deployment architecture, and production database choice.
 4. **Container and deployment validation:** Verify Docker build/run, configure frontend/backend hosting, HTTPS, CORS, health checks, and environment separation.
 5. **Operational controls:** Add structured logging with minimal PII, monitoring, alerts, backup/restore and rollback procedures.
 6. **Quality assurance:** Add targeted API integration, authorization, failure-path, security, and load tests; record evidence and known limitations.
@@ -81,11 +83,12 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Azure access, quota, or model deployment unavailable | Blocks cloud integration/deployment | Confirm subscription, region, roles, and quotas before provisioning; document blocker |
-| Employee selector mistaken for secure identity | Unauthorized access if deployed with real data | Synthetic-only controlled demo; add server-side authentication and authorization before public/real-data use |
+| Weak identity controls if exposed publicly | Unauthorized access with real data | Local auth, RBAC, CSRF and own-employee checks implemented and tested; add HTTPS, MFA/identity provider and managed secrets before public or real-data use |
+| Over-privileged database access | Full database compromise through any SQL flaw | Least-privilege app/reader roles, read-only SQL-agent transactions, timeouts, row limits, RLS (Phase 1 hardening); live apply pending approval |
 | Hallucinated or unsupported policy answers | Incorrect onboarding guidance | Ground responses in retrieved sources; abstain/escalate when evidence is insufficient; evaluate against test set |
 | Weak retrieval | Irrelevant answers | Evaluate chunking, similarity threshold, top-k, and source coverage |
 | Secret exposure | Credential compromise | Use environment/secret stores; rotate exposed keys; enable scanning; avoid committing `.env` |
-| SQLite unsuitable for production scaling | Data reliability/performance concerns | Choose and test managed Azure persistence before production |
+| Database choice for Azure not final | Reliability/performance concerns | PostgreSQL 16 used locally; choose and test managed Azure PostgreSQL before production |
 | Time constraints | Incomplete deliverables | Prioritize secure demo path and document deferred items |
 
 ## 7. Decision Log
@@ -99,6 +102,8 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 | 20 Nov 2026 | Use employee selector without authentication **for controlled local demo only** | Capstone prototype constraint |
 | 20 Nov 2026 | Azure-only final cloud target; Groq temporary | Align implementation with capstone platform decision |
 | 20 Nov 2026 | Backend first, React second, Azure last | Incremental verification |
+| 21 Nov 2026 | Local email/password authentication replaces the employee selector | Server-side identity and authorization before any shared use |
+| 23 Nov 2026 | Least-privilege PostgreSQL roles, read-only SQL-agent path and RLS before any LLM-generated SQL; keep approved query tools | Phase 1 of the hybrid SQL + RAG plan |
 
 ## 8. Migration and Backup History
 
@@ -118,7 +123,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 
 ## 10. Next Immediate Step
 
-**Next (after Step 10):** Azure milestones A1-A6 listed under "Step 10 - Final Local Testing and Release Readiness" below, starting with A1 (confirm Azure access). Local Steps 1-10 are complete.
+**Next:** Commit Phase 1 hardening and Phase 2A/2B (owner approval required; see "Version control readiness" at the end of this file). Then decide on Step 2C (LLM synthesis over typed evidence) or vocabulary extensions from real questions. Azure milestones (A1 onward) remain ON HOLD.
 
 ### PostgreSQL Dependency Update — 20 November 2026
 
@@ -538,3 +543,616 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 - Unchanged known limitations: Docker PostgreSQL password rotation deferred (required before deployment or sharing); no MFA, password reset or external identity provider; in-memory login rate limiter (per process, resets on restart, possible 15-minute nuisance lockout); no HTTPS locally; public API docs; backend port also published on localhost while `X-Forwarded-For` is trusted.
 
 **Local development phase:** ready to close. Next phase: Azure (A1 access confirmation onward), not started.
+
+
+---
+
+## Phase 1 - Hybrid SQL + RAG Architecture Audit (23 November 2026)
+
+**Scope:** read-only audit of the code against the planned hybrid architecture. No application code, databases, credentials or Docker containers were changed. The live container database was inspected via `docker exec ... psql` with `default_transaction_read_only=on`. `python -m pytest -q`: **189 passed** (SQLite fixtures, LLM mocked). Status labels: **Implemented / Partial / Missing / Not Verified**.
+
+### A1. Planned vs actual architecture
+
+```
+PLANNED                                         ACTUAL (code as of 23 Nov 2026)
+React -> API Gateway -> FastAPI                 React -> nginx /api reverse proxy -> FastAPI
+  -> Orchestrator -> Intent classification        -> orchestrator.answer_question -> regex classify_employee_query
+Path A: CSV -> PostgreSQL -> schema dictionary  Path A: hard-coded seed SQL/Python -> PostgreSQL (or SQLite)
+        -> text-to-SQL / approved tools                 -> 5 allow-listed parameterised functions (no schema dictionary)
+        -> shared LLM generator                         -> Python string templates (NO LLM)
+Path B: PDF -> chunk -> embed -> FAISS          Path B: Markdown (PDF only if no same-name .md) -> chunk -> fastembed -> FAISS
+        -> retrieve -> shared LLM generator             -> retrieve -> gate -> Groq LLM -> guardrails -> cited sources
+Mixed: both paths -> one grounded answer        Mixed: not supported (exactly one path per question)
+LLM: Azure OpenAI                               LLM: Groq (OpenAI-compatible client), no Azure code path
+```
+
+| # | Planned component | Status | Evidence |
+|---|---|---|---|
+| 1 | React frontend | Implemented | `frontend/src/App.jsx`, `frontend/src/api.js` |
+| 2 | API Gateway | Partial | `frontend/nginx.conf` strips `/api` and proxies to `backend:8000`; no managed gateway (rate limiting, auth offload, quotas) |
+| 3 | FastAPI backend | Implemented | `backend/main.py` (6 routers + `/health`) |
+| 4 | Orchestration layer | Partial | `backend/services/orchestrator.py::answer_question` - single if/else dispatch, no multi-tool plan |
+| 5 | Intent classification | Partial | `backend/services/employee_query_router.py::classify_employee_query` - regex only, 5 intents, verified misroutes (A6) |
+| 6 | PostgreSQL as system of record | Implemented | Docker forces `DB_BACKEND=postgresql` (`docker-compose.yml`); `docker/postgres/01_schema.sql` matches the live DB |
+| 7 | CSV import into PostgreSQL | Missing | no `.csv` files, no `COPY`/csv code anywhere; data comes from `docker/postgres/02_seed.sql` and `backend/migrations/002_seed_demo_data.py` (hard-coded tuples) |
+| 8 | Schema dictionary (tables, columns, types, relations) | Missing | no metadata module or file; nothing passes schema information to an LLM |
+| 9 | Safe text-to-SQL **or** approved query tools | Implemented (approved-tools option) | `employee_query_router.py::execute_employee_query` allow-list -> fixed bound-parameter queries in `employee_db.py`; no text-to-SQL exists |
+| 10 | Employee-specific retrieval | Implemented | employee ID taken from the session: `routes/chat.py::chat` -> `security.py::assert_own_employee` |
+| 11 | SQL results -> shared LLM generator | Missing | `orchestrator.py::_format_employee_answer` builds text from templates; `llm.generate_answer` is never called on Path A |
+| 12 | PDF ingestion | Partial | `ingest.py::_read_pdf` exists, but `load_chunks` skips a PDF when a same-stem `.md` exists; the current index has **0 PDF chunks** (48 chunks: `handbook.md` 23, `faqs.md` 25) |
+| 13 | Text extraction + chunking | Implemented | `ingest.py::chunk_markdown_handbook` (heading-aware, 350 words / 40 overlap), `chunk_faqs`, `_split_long` |
+| 14 | Embedding generation | Implemented | `embeddings.py::embed_texts` (fastembed `BAAI/bge-small-en-v1.5`, L2-normalised) |
+| 15 | FAISS vector storage | Implemented | `ingest.py::build_index` -> `IndexFlatIP`; `data/index/faiss.index` + `chunks.json` |
+| 16 | Similarity search + source references | Implemented | `retriever.py::search`; `guardrails.py::retrieval_gate`, `validate_answer`, `map_citation`; API returns `{file, section, score}` for cited chunks only (`rag.py`) |
+| 17 | RAG evidence -> LLM generator | Implemented (RAG-only, not shared) | `rag.py::answer_question` -> `llm.py::generate_answer` (system prompt is handbook-specific) |
+| 18 | Mixed queries (both paths, one answer) | Missing | `orchestrator.answer_question` returns from exactly one branch |
+| 19 | Azure OpenAI provider | Missing | `config.py` has only `groq_api_key` / `groq_base_url`; `llm.py::_client` builds `OpenAI(base_url=groq)`; no `AzureOpenAI`, endpoint, deployment or API-version settings |
+
+### A2. PostgreSQL inventory (live Docker database `onboardai`, verified read-only)
+
+All dates/timestamps outside the auth tables are stored as `text`. Row counts are from the live DB on 23 Nov 2026.
+
+| Table | Columns (SQL type, nullability / default) | PK | FKs / unique | Purpose | Rows |
+|---|---|---|---|---|---|
+| `employees` | employee_id text NN; name text NN; email text NN; department text NN; joining_date text NN; location text NN | employee_id | UNIQUE(email) | **Employee data** (profile) | 3 |
+| `leave_balances` | id integer identity; employee_id text NN; leave_type text NN; available_days double precision NN default 0, CHECK >= 0 | id | employee_id -> employees; UNIQUE(employee_id, leave_type) | **Leave balances** | 6 |
+| `assets` | asset_id text NN; employee_id text NN; asset_type text NN; asset_name text NN; status text NN default 'assigned' | asset_id | employee_id -> employees | **IT assets** | 3 |
+| `payroll_calendar` | id integer identity; payroll_month text NN; payment_date text NN; status text NN default 'scheduled' | id | UNIQUE(payroll_month) | **Payroll** (company-wide pay dates only; no per-employee payroll) | 2 |
+| `checklist` | id integer NN; phase text; task text; done integer (legacy global flag) | id | - | **Onboarding task catalogue** | 15 |
+| `checklist_assignments` | employee_id text NN; checklist_id integer NN; done integer NN default 0, CHECK in (0,1) | (employee_id, checklist_id) | employee_id -> employees; checklist_id -> checklist | **Per-employee onboarding tasks** | 45 |
+| `tickets` | ticket_id integer identity; employee_id text NN; category text NN; subject text NN; description text NN; status text NN default 'open'; created_at text NN default now; updated_at text NN default now | ticket_id | employee_id -> employees | **Support tickets** | 0 |
+| `escalations` | id integer identity; question text; contact_pref text; status text; created_at text | id | **none** (no employee_id column) | HR/IT escalations (simulated; not called by the frontend) | 0 |
+| `messages` | id integer identity; question text; answer text; found integer; sources text (JSON string); created_at text; employee_id text | id | **no FK** on employee_id; index (employee_id, id DESC) | **Chat history** | 1 |
+| `feedback` | id integer identity; message_id integer; rating text; comment text; created_at text | id | **no FK** on message_id | **Feedback** | 0 |
+| `user_accounts` | id integer identity; email text NN; password_hash text NN; employee_id text; role text NN default 'employee' CHECK in (employee, admin); is_active integer NN default 1; created_at bigint NN; updated_at bigint NN | id | UNIQUE(email), UNIQUE(employee_id), employee_id -> employees; CHECK admin or employee_id not null | **Authentication** | 1 |
+| `user_sessions` | token_hash text NN; user_id integer NN; csrf_token text NN; created_at bigint NN; last_seen_at bigint NN; expires_at bigint NN | token_hash | user_id -> user_accounts ON DELETE CASCADE | **Authentication (sessions)** | 0 |
+
+Data not present at all: designation/job title, manager, team, per-employee payroll/salary/payslips, task due dates/owners, asset serial numbers/issue dates.
+
+### A3. Ingestion status
+
+| Item | Status | Evidence |
+|---|---|---|
+| CSV -> PostgreSQL | **Missing** | No CSV files or loader. Seeding = `docker/postgres/02_seed.sql` (pg_dump INSERTs run by `docker-entrypoint-initdb.d`) and the SQLite-only `backend/migrations/001-004_*.py` |
+| PDF -> FAISS | **Partial** | `ingest.py::load_chunks` uses `handbook.md`; `handbook.pdf` is ignored because `handbook.md` exists. PDF chunks would get `section="PDF text"` and no page numbers, so their citations would be weak |
+| Re-index | Implemented / Not Verified in Docker | `POST /ingest` (`routes/admin.py::reindex`, admin + CSRF). In Docker `data/index` is mounted `:ro`, so a rebuild there would likely fail. Not executed, because it writes |
+| Source references | Implemented | file + section + score for cited chunks only (`guardrails.map_citation`, `rag.py`) |
+
+### A4. SQL agent verification
+
+| Check | Status | Evidence |
+|---|---|---|
+| Uses schema metadata | **Missing** | no schema dictionary; queries are hand-written in `employee_db.py` |
+| Generates SQL from text | **Missing** (by design today) | no LLM-generated SQL anywhere |
+| Only approved operations | Implemented | `execute_employee_query` allow-list of 5 functions; an unknown intent raises `ValueError` |
+| Bound parameters only | Implemented | all queries bind parameters (`?` -> `%s`); enforced by `test_backend_sql_uses_bound_parameters_only` |
+| Read-only execution | **Partial** | `employee_db._connection(readonly=True)` is enforced only for SQLite (`?mode=ro`); on PostgreSQL it opens a normal read-write transaction |
+| Least-privilege DB role | **Missing** | the app connects as `onboardai`, which is a PostgreSQL **superuser** (`rolsuper = t`, verified live) |
+| Statement timeout / row limit | **Missing** | none on app queries (only the `/health` probe sets `statement_timeout`) |
+| Coverage of data | Partial | intents: leave_balances, assets, checklist, tickets, profile. `payroll_calendar` is reachable only via `GET /employees/payroll/calendar`, not via chat. `profile` matches "designation", but no such column exists |
+
+### A5. RAG pipeline verification
+
+| Step | Status | Evidence |
+|---|---|---|
+| Load + extract | Partial | Markdown first, PDF only as a fallback (`ingest.load_chunks`, `_read_pdf`) |
+| Chunk | Implemented | heading-aware chunks with overlap (`chunk_markdown_handbook`, `_split_long`), FAQ Q/A chunks |
+| Embed | Implemented | `embeddings.embed_texts` (local fastembed, no API key) |
+| Store | Implemented | FAISS `IndexFlatIP` (cosine on normalised vectors) |
+| Retrieve | Implemented | `retriever.search`, top_k = 4 |
+| Evidence gate | Implemented | `guardrails.retrieval_gate` (0.65 threshold + 0.05 borderline band that needs keyword corroboration) |
+| Grounded generation | Implemented | `llm.generate_answer` (temperature 0, `<untrusted_context>` wrapping, `sanitize_passage`) |
+| Output validation | Implemented | `guardrails.validate_answer` (NOT_FOUND, leak check, citation validity, unsupported numbers/emails) |
+| Citations | Implemented | cited chunks only, as `{file, section, score}` |
+| Evaluation | Implemented earlier, Not Verified now | `scripts/rag_eval.py`, `docs/rag_eval_report.md` (50/50 recorded). Not re-run in this audit because it needs live Groq calls |
+
+### A6. Orchestration and routing verification
+
+**Onboarding question trace - "How many leaves do I have left?"**
+1. `frontend/src/api.js` -> `POST /api/chat` -> nginx strips `/api` (`frontend/nginx.conf`).
+2. `backend/routes/chat.py::chat`: `csrf_protected` resolves the session (`security.py::current_session` -> `services/auth.py::resolve_session`), `assert_own_employee` pins `employee_id` to the session's employee, and `employee_db.get_employee` checks that the employee exists.
+3. `services/orchestrator.py::answer_question` -> `employee_query_router.classify_employee_query` returns `"leave_balances"`.
+4. `employee_query_router.execute_employee_query` -> `employee_db.get_leave_balances` (`SELECT leave_type, available_days FROM leave_balances WHERE employee_id = %s`).
+5. `orchestrator._format_employee_answer` builds a bullet list (no LLM).
+6. `db.save_employee_message` writes to `messages`; the response is `{message_id, answer, sources: [], found: true}`.
+
+**Policy question trace - "What is the leave policy?"**
+1-2. Same as above.
+3. `classify_employee_query` returns `None` (policy patterns) -> `rag.answer_question`.
+4. `retriever.search` -> `embeddings.embed_texts` -> FAISS `IndexFlatIP.search` over `data/index/faiss.index` / `chunks.json`.
+5. `guardrails.retrieval_gate`. If it passes: `llm.generate_answer` (Groq) -> `guardrails.validate_answer` -> cited sources. If it fails: the fixed `FALLBACK` text.
+6. `db.save_employee_message`; the response includes the cited `sources`.
+
+**Classifier probe results (run directly against `classify_employee_query`):**
+
+| Question | Result | Correct? |
+|---|---|---|
+| How many leaves do I have left? | leave_balances | yes |
+| How many casual leaves do I have left? | None (RAG) | **no** - the policy pattern `(casual/sick/earned/annual) leave` takes priority over the personal intent |
+| What is my sick leave balance? | None (RAG) | **no** - same cause |
+| What is the leave policy? | None (RAG) | yes |
+| When is the next payroll date? | None (RAG) | **no** - no payroll intent; the DB table is unused by chat |
+| What is my designation? | profile | routed, but the answer cannot contain a designation (no column) |
+| Who is my manager? | None (RAG) | **no** - no data and no intent |
+| What is the laptop policy and which laptop do I have? | None (RAG only) | **no** - mixed question; the personal part is dropped |
+| Can I carry forward my remaining leaves and how many do I have? | leave_balances (DB only) | **no** - mixed question; the policy part is dropped |
+
+| Check | Status | Evidence |
+|---|---|---|
+| Intent classification | Partial | regex, first match wins, policy patterns checked first |
+| Mixed queries | **Missing** | single-branch return in `orchestrator.answer_question` |
+| Shared LLM answer generator for SQL + RAG | **Missing** | Path A never calls the LLM; `llm.generate_answer` accepts only handbook passages and uses a handbook-only prompt |
+
+### A7. Alignment estimate: about 63%
+
+**Method:** the target architecture was split into the 19 components in table A1. Each was scored from code evidence (not from earlier docs) as Implemented = 1, Partial = 0.5, Missing = 0, all weighted equally.
+
+- Implemented (10): components 1, 3, 6, 9, 10, 13, 14, 15, 16, 17
+- Partial (4): components 2, 4, 5, 12
+- Missing (5): components 7, 8, 11, 18, 19
+- Score = (10 x 1 + 4 x 0.5) / 19 = **12 / 19 = 63%**
+
+By area: **Path B (RAG, components 12-17) 5.5 / 6 = 92%**; **Path A (SQL, components 6-11) 3 / 6 = 50%**; **platform, routing and provider (components 1-5, 18, 19) 3.5 / 7 = 50%**. The RAG half is close to target. The gaps are concentrated in the structured-data path, the shared generator, mixed routing and Azure OpenAI. Equal weighting slightly flatters the result, because the missing items (schema dictionary, shared generator, mixed routing) are the core of the "hybrid" design.
+
+### A8. Gaps, security concerns and unnecessary components
+
+**Security concerns**
+- S1 (High) The app DB role `onboardai` is a PostgreSQL superuser (`POSTGRES_USER` in `docker-compose.yml`). Replace it with a least-privilege app role, plus a separate `SELECT`-only role, before any text-to-SQL.
+- S2 (High, before text-to-SQL) "Read-only" employee queries are not read-only on PostgreSQL (`employee_db._connection`). Needs `SET TRANSACTION READ ONLY` (or `default_transaction_read_only`), a `statement_timeout` and a row limit.
+- S3 (High, future) Once SQL results go to the LLM, `tickets.subject` and `tickets.description` are user-written text. Treat them as untrusted data (the same `<untrusted_context>` handling as RAG) and pass only the session employee's rows.
+- S4 (Medium) No FK on `messages.employee_id` or `feedback.message_id`; `escalations` has no `employee_id`, so escalations cannot be attributed to anyone.
+- S5 (Known, unchanged) In-memory login rate limiter; Docker PG password rotation deferred; public API docs; backend port published on localhost while proxy headers are trusted.
+
+**Functional gaps**
+- G1 No CSV import. G2 No schema dictionary. G3 Path A results do not go through the LLM. G4 No mixed-query support. G5 No Azure OpenAI client or config. G6 The regex classifier misroutes personal leave-type questions and has no payroll intent. G7 The handbook PDF is not indexed, and PDF chunks lack page metadata. G8 Dates are stored as `text`, which blocks reliable date filtering in SQL. G9 The schema lacks fields that users' questions imply: designation, manager and per-employee payroll.
+
+**Unnecessary / legacy components (candidates for removal after review)**
+- Dual SQLite + PostgreSQL code paths: `_postgres()` / `_execute` duplicated in `services/db.py` and `services/employee_db.py`; the SQLite-only `backend/migrations/001-004`; the `data/app*.db` backups.
+- Legacy global chat and checklist: `db.save_message` (rows without employee_id), `db.recent_messages` and `db.message_exists` (both unused), `routes/checklist.py` and the `checklist.done` column (superseded by `checklist_assignments`).
+- `postgres.check_postgres_connection` (unused); the `escalations` table and `/escalate` route (not used by the frontend, overlaps `tickets`).
+- `locust` in `requirements.txt` with an empty `tests/load/`; the committed `frontend/dist/`.
+- Stale statements earlier in this plan (Section 2 "Prototype persistence: SQLite", "Authentication: Not implemented") no longer match the code.
+
+### A9. Missing features ranked by priority
+
+| Priority | Feature | Why |
+|---|---|---|
+| P1 | Least-privilege DB roles plus enforced read-only, timeouts and row limits for Path A | prerequisite for any LLM-driven SQL |
+| P1 | Azure OpenAI provider (config + client), with Groq kept only as a local fallback | the stated target provider |
+| P1 | Shared response generator that takes typed evidence (SQL rows + RAG passages) | core of the hybrid design |
+| P2 | Intent classifier v2 that returns a set of intents (`sql`, `rag`, `both`) and fixes the leave-type and payroll questions | enables mixed queries; fixes the verified misroutes |
+| P2 | Mixed-query orchestration (run both paths, merge evidence, one grounded answer with SQL and document citations) | planned behaviour |
+| P2 | Schema dictionary (generated from `information_schema` plus curated descriptions and relationships) | grounding for tool selection and any text-to-SQL |
+| P3 | CSV import pipeline into PostgreSQL (validated, idempotent upserts) | planned data source |
+| P3 | PDF ingestion as a first-class source, with page numbers in citations | planned Path B input |
+| P3 | Optional constrained text-to-SQL (SELECT-only, allow-listed tables, validator, read-only role), only if approved tools prove insufficient | flexibility; highest risk |
+| P4 | Schema clean-up: proper date types, FKs on messages/feedback, drop legacy columns/tables, optional new fields (designation, manager) | data quality |
+| P4 | Remove the SQLite path and legacy endpoints | maintenance |
+
+### A10. Exact files requiring changes
+
+| Change | Files |
+|---|---|
+| Azure OpenAI provider | `backend/config.py`, `backend/services/llm.py`, `.env.example`, `docker-compose.yml` (env only), LLM mocks in `tests/unit` and `tests/integration` |
+| Shared generator + typed evidence | `backend/services/llm.py`, `backend/services/orchestrator.py`, `backend/services/rag.py`, `backend/services/guardrails.py` (also check numbers against SQL evidence), `backend/schemas/models.py` (source type for DB evidence) |
+| Classifier v2 + mixed routing | `backend/services/employee_query_router.py`, `backend/services/orchestrator.py`, new `tests/unit/test_intent_router.py` |
+| SQL safety | `backend/services/employee_db.py`, `backend/services/postgres.py`, new `docker/postgres/04_roles.sql`, `docker-compose.yml` |
+| Schema dictionary | new `backend/services/schema_dictionary.py` (plus a curated `data/schema_dictionary.json` or `.yaml`) |
+| CSV import | new `scripts/import_csv.py` (or `backend/services/csv_import.py`), new synthetic `data/csv/*.csv` |
+| PDF ingestion | `backend/services/ingest.py`, `backend/services/retriever.py`, `tests/unit/test_ingest.py`, `docker-compose.yml` (index mount for re-indexing) |
+| Payroll in chat | `backend/services/employee_query_router.py`, `backend/services/orchestrator.py` |
+| Schema clean-up / legacy removal | `docker/postgres/01_schema.sql` + a new migration SQL, `backend/services/db.py`, `backend/routes/checklist.py`, `backend/routes/feedback.py`, `backend/main.py`, `requirements.txt` |
+| Frontend (DB-evidence citations) | `frontend/src/App.jsx`, `frontend/src/format.js` |
+| Docs | `docs/architecture.md`, `docs/architecture.png`, `README.md`, this file |
+
+### A11. Recommended implementation order
+
+1. **Safety baseline:** least-privilege PostgreSQL roles, read-only transactions, statement timeout and row limit for Path A; write the tests first.
+2. **Azure OpenAI provider** behind a provider setting (Groq kept only as a local fallback); verify with `scripts/rag_eval.py`.
+3. **Shared response generator** that accepts `{type: sql|document, ...}` evidence; route Path A results through it with guardrails (number/email checks against SQL rows; untrusted-text wrapping).
+4. **Classifier v2 + mixed queries:** multi-intent output, fix the verified misroutes, add a payroll intent, run both paths when needed; add a routing test table.
+5. **Schema dictionary** generated from `information_schema` plus curated descriptions; use it for tool descriptions (and later for any text-to-SQL).
+6. **CSV import** into PostgreSQL with validation and idempotent upserts.
+7. **PDF-first ingestion** with page-level citations; rebuild the index.
+8. **Optional constrained text-to-SQL**, only if the approved tools are insufficient.
+9. **Clean-up:** remove the SQLite path and legacy tables/routes, fix date types and FKs; update the architecture docs.
+10. **Then** the Azure deployment milestones (A1 onward).
+
+**Status:** audit complete; no implementation started. Awaiting owner review before any code change or Azure work.
+
+
+---
+
+## Phase 1 - PostgreSQL Security Hardening (23 November 2026)
+
+**Status:** code complete and verified; **not applied to the running database.** The live Docker database was only inspected (read-only session): the backend still connects as `onboardai` (superuser) and no table has row-level security. Applying migration 005 and switching the backend to the new roles are approval steps (below). Nothing committed or pushed; no Azure resources.
+
+### What changed in code
+
+| Requirement | Implementation | Evidence |
+|---|---|---|
+| 1. No superuser for the app | New `onboardai_app` role: SELECT on application tables, INSERT only where the app inserts, UPDATE only on the exact columns it updates, DELETE only on `user_sessions`; NOSUPERUSER/NOCREATEDB/NOCREATEROLE/NOBYPASSRLS/NOINHERIT; role-level `statement_timeout=15s` | `backend/services/db_roles.py` (`APP_PRIVILEGES`), `backend/migrations/005_least_privilege_roles.py` |
+| 2. App features preserved | Grant map derived from every SQL statement in `auth.py`, `db.py`, `employee_db.py`; a test fails if a used statement is not granted or a granted privilege is unused | `tests/unit/test_db_roles.py`; live: `test_application_flows_work_with_app_and_reader_roles`; Docker e2e 15/15 |
+| 3. Separate read-only role/connection | New `onboardai_reader` role (SELECT on 7 employee-facing tables; no access to accounts, sessions, chat history, feedback, escalations) and `postgres_readonly_connection()` using `PG_READER_USER` | `backend/services/postgres.py`, `backend/config.py` |
+| 4. Read-only transactions | Reader role default `default_transaction_read_only=on`; every read-only connection also sets it in libpq options plus `BEGIN READ ONLY`, and is always rolled back; SQLite: `mode=ro` + `PRAGMA query_only` | `postgres.py`, `readonly_query.py` |
+| 5. Timeouts and row limits | `SQL_AGENT_STATEMENT_TIMEOUT_MS` (5000) and `SQL_AGENT_MAX_ROWS` (200, a ceiling callers cannot raise) on every read-only query; server-side cursor fetches at most limit + 1 rows; `PG_STATEMENT_TIMEOUT_MS` (10000) on app connections; timeouts return HTTP 503 with no SQL in the response or logs | `readonly_query.fetch_readonly`, `middleware/__init__.py` |
+| 6. Server-side employee isolation | Unchanged session-based route checks, plus row-level security for the reader role on employees, leave_balances, assets, checklist_assignments, tickets. **Superseded by the pre-activation fixes (next section):** the policy now requires an HMAC-signed, connection-bound, expiring employee scope verified in the database, not a plain session setting | `db_roles.py` (`RLS_TABLES`), `employee_scope.py`, `employee_db.py` |
+| Statement guard (SQL agent) | **Superseded (next section):** the regex guard was replaced by PostgreSQL-parser validation with allow-listed syntax, tables, functions and casts | `readonly_query.py` |
+| 7. Parameterised SQL preserved | All queries still bound; role names/identifiers composed with `psycopg2.sql.Identifier`; passwords sent SCRAM-hashed (`encrypt_password`), never in plaintext SQL | `test_backend_sql_uses_bound_parameters_only` still passes |
+| Startup guard | Development: warning when connected as superuser or without a reader role. `APP_ENV=production`: refuses to start | `db.enforce_role_policy` |
+| Docker | Backend can opt in via `DOCKER_PG_APP_USER/PASSWORD`, `DOCKER_PG_READER_USER/PASSWORD`; defaults are unchanged (`onboardai`) so the running stack is unaffected | `docker-compose.yml` (validated with `docker compose config`) |
+
+### Database roles and permissions (as verified on a disposable PostgreSQL 16)
+
+| Table | onboardai_app | onboardai_reader (RLS = own employee only) |
+|---|---|---|
+| employees | SELECT | SELECT (RLS) |
+| leave_balances, assets | SELECT | SELECT (RLS) |
+| payroll_calendar | SELECT | SELECT |
+| checklist | SELECT, UPDATE(done) | SELECT |
+| checklist_assignments | SELECT, UPDATE(done) | SELECT (RLS) |
+| tickets | SELECT, INSERT | SELECT (RLS) |
+| messages, feedback, escalations | SELECT, INSERT | none |
+| user_accounts | SELECT, INSERT, UPDATE(password_hash, employee_id, role, is_active, updated_at) | none |
+| user_sessions | SELECT, INSERT, UPDATE(last_seen_at), DELETE | none |
+| Role defaults (this DB) | statement_timeout 15s, idle-in-transaction 60s, 20 connections | read-only default, statement_timeout 5s, idle-in-transaction 10s, 10 connections |
+
+Also: `REVOKE TEMPORARY ON DATABASE ... FROM PUBLIC`, `REVOKE CREATE ON SCHEMA public FROM PUBLIC`. Schema migrations continue to run as the owner.
+
+### Verification (executed 23 November 2026)
+
+| Check | Result |
+|---|---|
+| Backend `python -m pytest -q` | **243 passed, 28 skipped** (was 189; +54 new unit tests; the 28 skips are the live-PostgreSQL tests, which need a disposable server) |
+| Live PostgreSQL role tests (`tests/integration/test_postgres_roles.py`, disposable `postgres:16-alpine`, real schema/seed/auth SQL, provisioned twice for idempotency) | **28 passed** - app flows (auth, sessions, chat history, feedback, escalation, checklist, tickets); 15 forbidden app statements (DDL, TRUNCATE, DELETE, ungranted columns, CREATE ROLE, disabling RLS) and self-escalation denied; reader denied on 5 sensitive tables, writes denied even after turning read-only off, no TEMP tables; RLS limits every secured table to the scoped employee and returns nothing without a scope; timeout (200 ms) cancels a long query; row limit; guard blocks scope escape; CLI dry run/verify print no secrets |
+| Docker end-to-end (test-tagged image, disposable DB mirroring the stack's superuser owner) | migration CLI dry run executes nothing (64 statements planned), `--apply` 63 statements, re-apply idempotent, `--verify` 0 problems; account provisioned as the app role; backend running as `onboardai_app` + `onboardai_reader`: **15/15** HTTP checks (health, login, own data, cross-employee 403, payroll, checklist write + read-back, ticket write + read, chat employee path, live RAG chat with sources, history, feedback, logout); no least-privilege warnings; 0 secrets in logs. Test containers, network and image removed |
+| Frontend `npm test` / ESLint `--max-warnings 0` / `npm run build` | 7 passed / 0 errors, 0 warnings / succeeded (no `dist` changes) |
+| `docker compose config --quiet`; `tests/unit/test_docker_config.py` | valid; 7 passed |
+| Live stack database (read-only inspection) | unchanged: `onboardai` superuser, no RLS; main stack containers healthy throughout |
+
+One defect was found and fixed during verification: `python backend/migrations/005_least_privilege_roles.py` failed inside the container with `No module named 'backend'`. The script now adds the project root to `sys.path` when run directly.
+
+### Migration steps requiring approval (not executed)
+
+Full commands: [runbook section 9](runbook.md#9-database-roles-least-privilege).
+1. Rebuild the backend image (`docker compose build backend`); this also picks up the earlier session fix. It does not touch the database volume.
+2. Choose two new random passwords (16+ characters) in environment variables. No existing password is changed.
+3. Run `005_least_privilege_roles.py --verify`, then the dry run, then `--apply` (one transaction, verified before commit). This creates the roles and grants, revokes TEMPORARY/CREATE from PUBLIC, and enables RLS with policies. The owner bypasses RLS, so the current backend keeps working.
+4. **Credential switch:** set `DOCKER_PG_APP_*` / `DOCKER_PG_READER_*` and recreate only the backend (`docker compose up -d --no-deps backend`).
+5. Rollback: unset those variables and recreate the backend. Roles and policies can stay in place.
+
+### Outstanding risks
+
+- The live database is unchanged until steps 3-4 are approved; until then the running backend is still a superuser connection (startup now logs this).
+- ~~The RLS scope is a session setting~~ - **fixed** (F1, next section): the scope is HMAC-signed and verified in the database.
+- ~~The statement guard is regex-based~~ - **fixed** (F2, next section): PostgreSQL-parser validation with allow-lists.
+- Without `PG_READER_USER`, read-only queries fall back to the app credentials: still READ ONLY and limited, but without the privilege boundary or RLS.
+- PUBLIC keeps EXECUTE on built-in functions (e.g. `pg_sleep`); bounded by statement timeouts.
+- The app role can read `user_accounts.password_hash` (required for login).
+- Fresh Docker volumes do not create the roles automatically; run migration 005 after first start.
+- Row-limit truncation is logged but not signalled to API clients (current tables have at most 15 rows per employee).
+- SQLite (tests/legacy) has no role separation or RLS.
+- Unchanged from before: in-memory login rate limiter; Docker owner password rotation deferred; no HTTPS locally.
+
+### Audit status updates
+
+S1 (superuser app role): **Implemented in code, pending apply.** S2 (read-only, timeouts, row limits): **Implemented.** A4 "Least-privilege DB role", "Read-only execution" and "Statement timeout / row limit": **Implemented** (code), live apply pending.
+
+### Files
+
+- New: `backend/services/readonly_query.py`, `backend/services/db_roles.py`, `backend/migrations/005_least_privilege_roles.py`, `tests/unit/test_readonly_query.py`, `tests/unit/test_db_roles.py`, `tests/integration/test_postgres_roles.py`
+- Modified: `backend/config.py`, `backend/services/postgres.py`, `backend/services/employee_db.py`, `backend/services/db.py`, `backend/middleware/__init__.py`, `docker-compose.yml`, `.env.example`, `docs/runbook.md`, `docs/architecture.md`, `docs/project_plan.md`
+
+**Next:** see "Phase 1 - Pre-activation Security Fixes" below; then owner approval of the migration steps.
+
+
+---
+
+## Phase 1 - Pre-activation Security Fixes (23 November 2026)
+
+**Status:** fixed and verified on temporary databases only; **migration 005 is still NOT applied to the running database.** Nothing committed or pushed.
+
+### Findings from the pre-activation verification
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| F1 | The reader role could impersonate another employee. Row-level security compared `employee_id` to the plain session setting `app.current_employee`, which any session can change with `SET`, `SET LOCAL` or `set_config()` | High (exploitable with reader credentials or any arbitrary-SQL path) | **Fixed** |
+| F2 | The regex statement guard could be bypassed with a quoted identifier (`SELECT "set_config"(...)`), letting a query reach F1 through the backend's guarded path | High (for any future LLM-generated SQL) | **Fixed** |
+
+Neither finding was reachable through the application as deployed: all queries are hard-coded and nothing user-supplied runs as SQL.
+
+### Fix 1 - PostgreSQL parser + strict allow-list validation (`backend/services/readonly_query.py`)
+
+- Statements are parsed with **pglast 7.24** (libpg_query, PostgreSQL's own parser) and must be exactly one `SelectStmt`.
+- Every node of the syntax tree must be an allow-listed type. Tables must be the reader's seven tables (or CTE names), unqualified or `public`. Functions must be on a list of pure aggregate, string, number and date helpers, unqualified or `pg_catalog`. Cast types must be allow-listed.
+- Rejected, among others: `SET`/`RESET`/`DO`/`CALL`/`COPY`/`EXPLAIN`; multiple statements; `set_config` and `current_setting` in every spelling the server accepts (plain, quoted, schema-qualified, Unicode-escaped, `UESCAPE`, inside subqueries, CTEs, `WHERE`, `LATERAL`); functions in `FROM`; data-modifying CTEs; `SELECT INTO`; `FOR UPDATE/SHARE`; catalog, `information_schema` and private schemas; `reg*` casts; `?` placeholders inside literals.
+- The text that is validated is the text that runs: placeholder count must match the parameters, and `%` is escaped for the driver.
+
+### Fix 2 - Database-enforced, HMAC-signed employee scope (`backend/services/employee_scope.py`, migration 005)
+
+- Reader policies now use `employee_id = (SELECT onboardai_rls.current_employee())`.
+- `current_employee()` is `SECURITY DEFINER` (owner) with `search_path = pg_catalog, pg_temp`. It returns the employee only if `app.scope_sig` equals HMAC-SHA256(key, `v1:<employee>:<connection id>:<expiry>`). The connection id is `pg_backend_pid()` plus `backend_start`, so a signature cannot be replayed from another connection. Expiry is checked against the server clock, with a 60-second lifetime and a maximum of 600 seconds. Malformed values return NULL, which means no rows.
+- The key is stored as HMAC inner/outer padded keys in `onboardai_private.scope_key`. Only the owner can use the schema: no USAGE for PUBLIC, the app role or the reader role, and no SELECT on the table. The function source in `pg_proc` contains no key material. The reader has USAGE on `onboardai_rls` and EXECUTE on the two functions only; the app role and PUBLIC have neither.
+- Backend: `PG_SCOPE_SECRET` (32+ characters, same value given to migration 005 as `ONBOARDAI_SCOPE_SECRET`). Each read-only transaction fetches its connection id, signs, and sets the three settings transaction-locally. Wrong or missing secret means no rows. The backend refuses to start when `PG_READER_USER` is set without a valid secret.
+- Migration 005: creates the private and verifier schemas, the key table and the functions; stores the key once (never replaced without `--rotate-scope-secret`; a mismatching secret only produces a note); creates or updates the reader policies; `--verify` checks the key, privileges, `SECURITY DEFINER`, pinned search path, EXECUTE grants, and that the policies use the verifier (and, given the secret, that it matches).
+
+### Security test results (temporary PostgreSQL 16 only)
+
+| Test | Result |
+|---|---|
+| Reader `SET app.current_employee` / `SET LOCAL` / `set_config` (session and local) | **PASS** - 0 rows (was a bypass) |
+| Reader quoted `"set_config"`, `pg_catalog.set_config`, Unicode-escaped, `UESCAPE` (direct SQL) | **PASS** - 0 rows |
+| Forged settings: random, all-zero, non-hex or expired signatures | **PASS** - 0 rows |
+| Tampering with a valid EMP001 scope (change employee or expiry) | **PASS** - access revoked (0 rows), never widened |
+| Replay of a valid EMP002 signature from another connection (session- and transaction-level) | **PASS** - 0 rows; control: valid on its own connection only |
+| Signature made with a wrong secret; expired; beyond the maximum lifetime | **PASS** - 0 rows |
+| Scope survives only its transaction | **PASS** |
+| Reader/app reading or updating the key, creating objects in the private schema, replacing or overloading the verifier, `ALTER FUNCTION`, `ALTER POLICY`, `pg_temp` functions | **PASS** - all denied |
+| Key material in catalogs (`pg_proc` source) | **PASS** - none |
+| Malicious SQL through the backend path **with the validator skipped** (quoted `set_config` + read, MATERIALIZED CTE, `LATERAL`, `WHERE set_config(...)`, explicit EMP002 filters, UNION over all employee tables) | **PASS** - no EMP002 rows (database-enforced) |
+| Same malicious SQL through `fetch_readonly` | **PASS** - rejected by the parser |
+| Parser validation unit tests (67 statements: 12 allowed, 55 malicious) | **PASS** |
+| SQL HMAC formula equals Python `hmac` | **PASS** |
+| EMP001 vs EMP002 on every tested path: data-layer functions, SQL-agent queries (unfiltered, `= EMP002`, `<> EMP001`), scope-less connection, raw reader SQL, 13 HTTP cross-employee checks | **PASS** - EMP001 never received an EMP002 record |
+| App role: disable RLS, drop/alter/create policies, BYPASSRLS, `SET ROLE`, functions in `public`, write other employees' leave/tickets/messages, grant reader access to accounts | **PASS** - all denied or no effect |
+| Wrong backend secret | **PASS** - fails closed (no rows, no error leak) |
+| Clone of live data: old image before migration / old image after migration / new image as owner / new image as app + reader roles | **PASS** - 26/26 HTTP checks in each of the four states |
+| Migration on the clone: verify before (exit 1), dry run (nothing created), `--apply` (75 statements, one transaction), re-apply (idempotent), verify after (0 problems), data unchanged, no secrets in output or logs | **PASS** |
+| Clone attack script (direct DB, validator-skipped and guarded paths, escalation, app role) | **PASS** - 43 blocked, 0 bypasses |
+| `python -m pytest -q` | **PASS** - 300 passed, 77 skipped (the live-PostgreSQL tests) |
+| `tests/integration/test_postgres_roles.py` on a disposable PostgreSQL 16 | **PASS** - 77 passed |
+| Frontend `npm test` / ESLint `--max-warnings 0` / `npm run build`; `docker compose config` | **PASS** - 7/7, 0 warnings, built (no `dist` changes), valid |
+| Container image: pglast installs on Python 3.12 (Linux) | **PASS** |
+
+The live stack database was only read (`pg_dump` for the clone); all temporary containers, the network and the test image were removed; the main stack stayed healthy.
+
+### Activation steps (unchanged order; still require approval)
+
+As in [runbook section 9](runbook.md#9-database-roles-least-privilege), with one addition: generate `ONBOARDAI_SCOPE_SECRET` (32+ characters), pass it to the migration, and set `DOCKER_PG_SCOPE_SECRET` to the same value before recreating the backend.
+
+### Remaining risks (after the fixes)
+
+- Migration 005 is still not applied; the running backend remains a superuser connection until activation.
+- The scope secret is a new credential. If it leaks together with the reader password, an attacker with database network access could sign any employee's scope. The database port is not published outside Docker.
+- The app role intentionally reads all employees' rows; per-employee isolation for normal API traffic is enforced by the session-based route checks (tested), not by the database.
+- The verifier's owner must be a superuser or a member of `pg_read_all_stats` (true for the Docker owner); provisioning refuses otherwise.
+- Signature comparison in SQL is not constant-time; with HMAC over a per-connection message, a remote timing attack is not practical.
+- pglast's grammar is PostgreSQL 17's, which is a superset of the 16 server; constructs that 16 does not support fail at execution, never bypass validation.
+- Row-limit truncation is logged but not signalled to API clients.
+- Unchanged: in-memory login rate limiter, Docker owner password rotation deferred, no HTTPS locally.
+
+### Files (this step)
+
+- New: `backend/services/employee_scope.py`
+- Modified: `backend/services/readonly_query.py` (parser validator), `backend/services/postgres.py` (signed scope), `backend/services/db_roles.py` (private key, verifier, policies, verify), `backend/migrations/005_least_privilege_roles.py` (scope secret, `--rotate-scope-secret`), `backend/services/db.py` (startup check), `backend/config.py` (`PG_SCOPE_SECRET`), `requirements.txt` (`pglast==7.24`), `docker-compose.yml` (`DOCKER_PG_SCOPE_SECRET`), `.env.example`, `tests/unit/test_readonly_query.py`, `tests/integration/test_postgres_roles.py`, `docs/runbook.md`, `docs/architecture.md`, `docs/project_plan.md`
+
+**Phase 1 readiness:** security fixes complete; activation status is tracked in the next section.
+
+
+---
+
+## Phase 1 - Activation Status (23 November 2026)
+
+**Status: ACTIVATED (23 November 2026).** Preflight passed, the owner gave final confirmation, migration 005 was applied and the backend switched to the least-privilege roles. The preflight record below describes the state before activation; the activation result is at the end of this section.
+
+### Preflight results
+
+| Check | Result | Evidence |
+|---|---|---|
+| 1. Running Docker database healthy | **PASS** | db, backend and frontend containers healthy; `pg_isready` accepting connections; `/api/health` 200 `database: ok`; PostgreSQL 16.16, 8.3 MB; no other client sessions |
+| 2. Usable backup exists | **PASS** (created during preflight) | None existed for the Docker PostgreSQL database (only SQLite files from 20 Nov). Created `onboardai_local_backups/postgres_docker/onboardai_pre_phase1_20261123_121605.dump` outside the repository (pg_dump custom format, 23,699 bytes, SHA-256 `a144332004654d81dfe0cbdc2031e54097bc74e9a364c60a5c19c5142c0b1657`). Restored into a throwaway container with `pg_restore --exit-on-error`: all 12 tables and every row count match live. Restoring needs a fresh `postgres:16` container with `POSTGRES_USER=onboardai`. The file contains one account's password hash: keep it local |
+| 3. Role passwords and scope secret configured securely | **PASS** (after owner decision) | Initially none were set anywhere. Owner chose a locked file outside the repository: `onboardai_secrets/phase1.env`, ACL `labuser` FullControl only, inheritance disabled, not in git. Holds the existing `DOCKER_PG_PASSWORD` (copied from the running container's configuration, unchanged, consistent with the backend), new app and reader passwords (43 characters each), new scope secret (64 characters), and `BACKEND_PORT=8001` / `FRONTEND_PORT=8080` so a recreate keeps the current ports. No value was displayed or logged. Runbook section 9 documents the file |
+| 4a. Runbook step 1: `docker compose build backend` | **PASS** | Image rebuilt; the running backend container is still on its original image (not recreated) |
+| 4b. `--verify` on the live database | **PASS** (expected exit 1) | Problems are exactly `role onboardai_app does not exist`, `role onboardai_reader does not exist` |
+| 4c. Dry run on the live database | **PASS** | Exit 0; 75 statements planned, identical to the preview on the verified backup restore; no errors or notes; nothing created; 0 secret values in output |
+| 5. Unexpected errors | **None** | Only cosmetic: Windows PowerShell 5.1 shows compose progress lines as `NativeCommandError` (exit codes 0/1 as expected; 0 Python errors); one-off containers removed |
+
+### Changes `--apply` will make (one transaction, verified before commit)
+
+- **Roles:** create `onboardai_app` and `onboardai_reader` (LOGIN, no superuser/createdb/createrole/replication/bypassrls, SCRAM passwords); defaults for this database (app: statement_timeout 15 s, idle-in-transaction 60 s; reader: read-only by default, statement_timeout 5 s, idle-in-transaction 10 s); connection limits 20 and 10.
+- **Database and schema hardening:** `REVOKE TEMPORARY ON DATABASE onboardai FROM PUBLIC`; `REVOKE CREATE ON SCHEMA public FROM PUBLIC`; CONNECT and USAGE on `public` for both roles.
+- **Grants:** 23 privilege grants on the 12 application tables and 5 identity sequences for the app role; SELECT on 7 tables for the reader (as listed in runbook section 9).
+- **New objects:** schema `onboardai_private` with table `scope_key` (1 row: the HMAC padded keys; owner-only); schema `onboardai_rls` with `connection_id()` and the SECURITY DEFINER `current_employee()` (EXECUTE for the reader only).
+- **Row-level security:** enabled on employees, leave_balances, assets, checklist_assignments and tickets, with 10 policies (app: all rows; reader: signed employee scope).
+- **Not changed:** any table data, the `onboardai` owner role and its password, other tables, the running containers. The owner bypasses row-level security, so the current backend keeps working (tested: state B, 26/26).
+- **Locking:** enabling RLS briefly takes exclusive locks on the 5 tables inside one short transaction (about 1 s measured on the clone).
+
+### After `--apply` (runbook step 4, part of the approved activation)
+
+Add the switch variables to the secrets file and recreate only the backend (`docker compose --env-file ... up -d --no-deps backend`). This is a few seconds of backend restart on the new image as `onboardai_app` + `onboardai_reader` with the scope secret. Sessions are server-side in the database, so signed-in users stay signed in. Then: health, login, isolation and live verification checks. Rollback is in runbook section 9.
+
+### Activation result (23 November 2026, after the owner's final confirmation)
+
+**Status: ACTIVATED.** Migration 005 is applied to the live Docker database and the backend runs as `onboardai_app` + `onboardai_reader` with the signed employee scope.
+
+| Step | Result |
+|---|---|
+| Gate: health immediately before apply | `/api/health` 200 `database: ok`; 0 active sessions |
+| Runbook step 3: `--apply` | Exit 0: "Migration 005 applied: 75 statements, roles onboardai_app and onboardai_reader verified" (one transaction, verified before commit); 0 secret values in output |
+| `--verify` (with scope secret) | Exit 0, 0 problems; RLS on all 5 employee tables; stored key matches the secret; verifier SECURITY DEFINER with pinned search path; key unreachable by app, reader and PUBLIC; verifier executable by the reader only |
+| Gate: old backend (owner) after apply | Healthy; protected routes 401; data unchanged |
+| Runbook step 4: credential switch | Switch variables added to the locked secrets file (owner-only ACL kept); `docker compose --env-file ... up -d --no-deps backend` recreated only the backend on the new image; healthy after 12 s; `PG_USER=onboardai_app`, `PG_READER_USER=onboardai_reader`, scope secret set; port 127.0.0.1:8001 unchanged; db and frontend containers not restarted |
+| HTTP checks (via nginx, non-invasive) | `/api/health` 200; backend `:8001/health` 200; 5 protected routes 401 without a session; wrong-password login 401 |
+| In-container live checks (backend's own configuration; read-only, attacks denied or rolled back) | **37/37 PASS**: app connects as non-superuser `onboardai_app`; reader is read-only by default; startup policy reports no issues; EMP001 profile, leave, 15-item checklist and payroll read through the signed scope; unfiltered SQL-agent queries on all 5 employee tables return only EMP001; explicit EMP002 filter and scope-less reads return nothing; validator rejects quoted `set_config`, `SET`, `user_accounts`, signing key; reader `SET LOCAL`, `set_config`, quoted `set_config`, forged signature and replayed EMP002 signature give no EMP002 rows; reader cannot read the key or accounts, write, replace the verifier or `SET ROLE`; app role cannot disable RLS, alter policies, read the key, call the verifier, gain BYPASSRLS, `SET ROLE`, delete or run DDL |
+| Backend log since the switch | 0 tracebacks; no least-privilege warnings; no secrets |
+| Live data | Unchanged: 1 account, 9 completed checklist items, 1 message, 0 tickets, 0 feedback, 0 escalations |
+
+**Not performed (by design, non-invasive):** sign-in with the real account and data writes on the live stack. App-role writes (checklist, tickets, chat history, feedback, sessions) were verified on the clone with the identical plan (26/26 in state D). **Recommended owner check:** sign in at http://localhost:8080, toggle a checklist item, ask the assistant one question.
+
+**Rollback (if ever needed):** remove the `# Runbook step 4` block from `onboardai_secrets/phase1.env` and run `docker compose --env-file <file> up -d --no-deps backend`; the backend returns to the owner account. Full database restore: the pre-activation backup above.
+
+**Operating note:** from now on run compose commands with `--env-file C:\Users\Administrator\Desktop\employee-onboarding-assistant-day31\onboardai_secrets\phase1.env` (runbook section 9). Without it, compose cannot interpolate `DOCKER_PG_PASSWORD`, and a recreate would not use the least-privilege roles.
+
+**Remaining risks:** the existing `DOCKER_PG_PASSWORD` is weak (11 characters) and its rotation is still deferred; the secrets file and the backup are plaintext on disk (owner-only ACL; also keep the values in a password manager); the backup contains one password hash; in-memory login rate limiter; no HTTPS locally.
+
+
+---
+
+## Phase 2 - Hybrid SQL + RAG Orchestration: Step 1 Investigation (23 November 2026)
+
+**Azure integration and deployment: ON HOLD** (owner decision, 23 November 2026). Milestones A1-A6, Azure OpenAI migration, Azure hosting and CI/CD deployment are paused; Groq remains the LLM provider. Work focuses exclusively on Phase 2.
+
+**Scope of this step:** read-only investigation. No application code, migrations, databases or containers changed; nothing committed. Proposed changes below await owner approval.
+
+### Request path (verified in code)
+
+1. `frontend/src/api.js` `chat()` -> `POST /api/chat {employee_id, question}` -> nginx -> `backend/routes/chat.py::chat`.
+2. Authentication context: `security.csrf_protected` -> `auth.resolve_session` (server-side session cookie + CSRF header). `assert_own_employee` replaces any request `employee_id` with the session's employee (403 on mismatch); admin accounts have `employee_id = None`.
+3. `services/orchestrator.py::answer_question` -> `employee_query_router.classify_employee_query(question)`, which returns **one** intent or `None`.
+4. Intent -> `execute_employee_query` (allow-list of 5 functions in `employee_db.py`) -> `readonly_query.fetch_readonly` (pglast validation, reader role, READ ONLY, timeout, row limit, HMAC-signed employee scope enforced by RLS) -> `_format_employee_answer` (deterministic text, **no LLM**) -> `db.save_employee_message`.
+5. `None` -> `rag.answer_question`: `retriever.search` (FAISS) -> `guardrails.retrieval_gate` -> `llm.generate_answer` (Groq; handbook-only prompt) -> `guardrails.validate_answer` (citations must be `[Handbook n]`/`[FAQ]`) -> fallback text if anything fails -> saves the message itself.
+6. Response contract `ChatResponse {message_id, answer, sources: [{file, section, score}], found}`; the frontend `formatSources` renders any `{file, section}` pair, so new source kinds need no frontend change.
+
+### Root cause: onboarding-status misrouting
+
+`classify_employee_query` (`backend/services/employee_query_router.py`) matches the `checklist` intent only with `(my|onboarding) ... (checklist|tasks?|progress)` or `(pending|completed) ... (tasks?|checklist)`. **"status" is not in either keyword list**, so "What is my onboarding status?" returns `None` and falls through to handbook RAG. There are **no unit tests for the classifier**, so the gap was never caught.
+
+Classifier probe (executed against the current code):
+
+| Question | Routed to | Expected |
+|---|---|---|
+| What is my onboarding status? | RAG | checklist (SQL) |
+| How far along am I with onboarding? / Am I done with onboarding? | RAG | checklist (SQL) |
+| What do I still need to complete? / What tasks are left for me? / How many tasks have I completed? | RAG | checklist (SQL) |
+| What is my onboarding progress? / Which onboarding tasks are still pending? / Show my checklist | checklist | checklist (correct) |
+| How many casual leaves do I have left? / What is my sick leave balance? | RAG | leave_balances (the leave-type "policy" pattern is checked first and wins) |
+| When is the next payroll date? / When is my next salary payment? | RAG | payroll calendar (no payroll intent exists) |
+| What is the leave policy and how many leaves do I have left? | RAG only | SQL + RAG (mixed) |
+| Which laptop do I have and what is the laptop policy? | RAG only | SQL + RAG (mixed) |
+| What is the dress code? | RAG | RAG (correct) |
+
+### Data supporting onboarding status (live database, read-only)
+
+- `checklist(id integer PK, phase text, task text, done integer)` - 15 tasks: Day 1 (4), Week 1 (6), Month 1 (5). `checklist.done` is a legacy global flag (all 0, used only by the admin `/checklist` route).
+- `checklist_assignments(employee_id text, checklist_id integer, done integer 0/1; PK (employee_id, checklist_id); FKs to employees and checklist)` - 15 per employee; current progress EMP001 4/15, EMP002 3/15, EMP003 0/15.
+- `employee_db.get_employee_checklist(employee_id)` already returns `{id, phase, task, done}` for the session employee through the reader role + signed scope. **Onboarding status needs no new SQL**, only routing and formatting. No due dates or task owners exist (status can be "x of y, by phase, pending items", not "overdue").
+
+### Safeguards in place (to preserve)
+
+- Identity from the server-side session only; request `employee_id` must match (403); admins have no employee workspace.
+- SQL path: allow-listed functions only (no LLM-generated SQL); every read through `fetch_readonly` (PostgreSQL-parser validation, reader role, READ ONLY, 5 s timeout, 200-row cap) with an HMAC-signed, connection-bound scope verified by RLS (Phase 1, activated).
+- RAG path: retrieval gate, untrusted-context wrapping, output validation (citations, unsupported numbers/emails, leak check), fallback text.
+- Gap found: `guardrails.leak_reasons` checks `groq_api_key` and `pg_password` but not the new `pg_reader_password` / `pg_scope_secret`.
+
+### Mixed SQL + RAG support
+
+**Not supported.** `orchestrator.answer_question` returns from exactly one branch; `rag.answer_question` persists its own message, so two parts cannot be combined into one saved message; the LLM prompt and `guardrails.citations()` accept only handbook/FAQ evidence.
+
+### Proposed changes (smallest safe set; awaiting approval)
+
+**Step 2A - routing fix and onboarding status (fixes the reported bug)**
+
+| File / function | Change |
+|---|---|
+| `employee_query_router.py` | Add `route(question) -> Route(sql_intents: tuple, needs_policy: bool)`. Onboarding vocabulary (status, progress, pending, remaining, left, completed, done, how far, still need) -> `checklist`. A personal marker (my, I, me, do I have, left, remaining, balance) beats the leave-type policy pattern. New `payroll` intent (next payroll / pay date / salary payment date). Policy cues (policy, rules, allowed, can I, eligible, how do I, process) -> `needs_policy`. Keep `classify_employee_query` as a compatible wrapper |
+| `employee_query_router.execute_employee_query` | Add `payroll` -> existing `employee_db.get_payroll_calendar` (company-wide, no scope). The allow-list stays closed; no new SQL |
+| `orchestrator._format_employee_answer` | Checklist answer leads with a status summary ("4 of 15 onboarding tasks completed (27%)", per-phase counts, pending tasks first); payroll formatter |
+| `guardrails.leak_reasons` | Also check `pg_reader_password` and `pg_scope_secret` |
+
+**Step 2B - mixed queries (deterministic composition, no new LLM surface)**
+
+| File / function | Change |
+|---|---|
+| `rag.py` | Split `answer_question` into `answer_policy(question) -> result` (no persistence) plus the existing wrapper (unchanged behaviour for RAG-only questions) |
+| `orchestrator.answer_question` | When `route` has SQL intents **and** `needs_policy`: run the SQL tool(s) (same allow-list and session scope) and the RAG pipeline, then return one answer ("From your records: ... / From the handbook: ..."), sources = `{file: "Your records", section: <tool label>, score: 1.0}` + the cited handbook sources, `found` if either part was found, **one** saved message. If the LLM is unavailable, return the records part with a note for the policy part (no 503 when data is available) |
+| Unchanged | `ChatRequest`/`ChatResponse`, routes, frontend, database, migrations, Phase 1 security modules |
+
+**Step 2C - optional, separate approval later:** shared LLM synthesis over typed evidence (SQL rows wrapped as untrusted data, because ticket subjects and descriptions are user-written; `[Your records]` citations validated by guardrails; numbers checked against SQL rows), and LLM tool selection or text-to-SQL backed by a schema dictionary. Deferred because it adds prompt-injection surface; 2A/2B deliver the hybrid behaviour with existing grounded components.
+
+### Tests required
+
+- **Unit - routing table** (new `tests/unit/test_intent_router.py`): every probe question above plus negatives (pure policy questions stay RAG; "Show EMP002's checklist" still uses the session employee). Includes the regression case "What is my onboarding status?" -> checklist.
+- **Unit - formatting:** onboarding status (all pending / partial / all done / empty), payroll, leave types.
+- **Unit - orchestration:** mixed query returns both parts and both source kinds and saves one message; RAG fallback keeps the SQL part; LLM unavailable keeps the SQL part; admin without employee gets the policy part plus a note; SQL-only and RAG-only paths unchanged (existing tests).
+- **Unit - guardrails:** leak check covers reader password and scope secret.
+- **Integration (`/chat` via TestClient):** EMP001 onboarding status returns EMP001's checklist only; mixed question; cross-employee and CSRF behaviour unchanged; `ChatResponse` contract and history unchanged.
+- **Existing suites:** full backend (300), live-PostgreSQL role/attack suite (77) on a disposable server, frontend tests/lint/build.
+- **Clone verification:** HTTP checks on a clone of the live data with the least-privilege roles (as in Phase 1), before any change to the running stack.
+
+
+---
+
+## Phase 2 - Hybrid SQL + RAG Orchestration: Steps 2A and 2B Implemented (23 November 2026)
+
+**Status: IMPLEMENTED AND MANUALLY VERIFIED.** Approved by the owner on 23 November 2026; validated on a temporary clone (the running stack was not modified during that validation), then deployed by the owner to the local Docker stack (backend image rebuilt and backend container recreated at 14:26-14:35 IST; still running as `onboardai_app` with the reader role and signed scope; no migration or database change). Not yet committed. Azure integration and deployment remain **ON HOLD**; Groq remains the LLM provider.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `backend/services/employee_query_router.py` | New deterministic `route(question) -> Route`: clause splitting at new questions only, per-clause precedence P1-P5 (topic state cue > policy cue > first-person + personal topic > ambiguous topic > general), topic inheritance for follow-up clauses, third-party detection, leave-type focus. `classify_employee_query` kept as a wrapper. Closed allow-list resolved by name at call time; new `payroll` intent via `execute_company_query` (existing `get_payroll_calendar`). No new SQL |
+| `backend/services/orchestrator.py` | Records-only, handbook-only and mixed flows; one saved message per chat in every flow; checklist status summary ("You have completed 4 of 15 onboarding tasks (27%); 11 pending", per-phase counts, pending first), leave-type focus, payroll next date, whole-number day display; source labels `Your records` / `Company records`; safe notes for third-party requests, accounts without an employee workspace and handbook failures |
+| `backend/services/rag.py` | `answer_policy()` (no persistence) split from `answer_question()` (unchanged behaviour: same pipeline, saves once) |
+| `backend/services/guardrails.py` | Leak check also covers `pg_reader_password` and `pg_scope_secret` |
+| Docs | `docs/architecture.md` (new "Hybrid chat routing" section, diagrams, components), `README.md` (routing and response steps) |
+| Unchanged | `ChatRequest`/`ChatResponse`, routes, authentication, CSRF, frontend code, database schema, migrations, Phase 1 security modules |
+
+### Routing examples (verified)
+
+| Question | Route | Answer source |
+|---|---|---|
+| What is my onboarding status? | records: checklist (P1) | Your records > Onboarding checklist |
+| How far along am I with onboarding? / What do I still need to complete? | records: checklist | Your records |
+| How many casual leaves do I have left? | records: leave_balances (P1 beats leave-type wording) | "Casual Leave: 8 days available." + all balances |
+| How many casual leaves do I get in a year? | handbook (P2) | handbook.md |
+| How many casual leaves? | handbook (P4 ambiguous -> safe default) | handbook.md |
+| When is the next payroll date? | records: payroll | Company records > Payroll calendar |
+| When is my salary credited? | handbook (payroll is company-wide; rule question) | handbook.md |
+| What is the leave policy and how many do I have left? | mixed: leave_balances + handbook("what is the leave policy") | Your records + handbook.md |
+| Which laptop do I have and what is the laptop policy? | mixed: assets + handbook | Your records + handbook.md |
+| What is my onboarding status? Also, what is the dress code? | mixed: checklist + handbook | Your records + handbook.md |
+| Show EMP002's checklist / How many leaves does Meera have left? | records clause with third party -> refused, no query | none |
+| What is the dress code? | handbook (P5) | handbook.md |
+
+### Fallbacks
+
+Missing records -> "No ... records were found." (never invented). Weak handbook evidence or rejected LLM answer -> standard fallback text. Mixed question with LLM unavailable or retrieval error -> records part plus "I could not check the handbook right now ..." (HTTP 200). Handbook-only question with LLM unavailable -> HTTP 503 as before, nothing saved. Database timeout -> HTTP 503 (Phase 1), nothing saved. Admin (no employee) -> note instead of personal records; payroll calendar and handbook part still answered.
+
+### Test results
+
+| Suite | Result |
+|---|---|
+| 2A gate: full backend suite after Step 2A | 409 passed, 77 skipped (live-PostgreSQL suite, run separately below) |
+| Full backend suite after Step 2B (final) | **445 passed**, 77 skipped (300 existing + 145 new: routing table and precedence 91, orchestration/formatting 36, `/chat` integration 13, guardrails leak 5) |
+| Live-PostgreSQL role/attack suite on a disposable server | **77 passed** |
+| Phase 1 adversarial DB attacks on the clone | **43 blocked, 0 bypasses** |
+| Clone HTTP checks, Phase 2 image as `onboardai_app` + `onboardai_reader` + signed scope, real Groq | **23/23 passed** |
+| Clone HTTP checks, same image with an invalid Groq key (LLM outage) | **5/5 passed** |
+| Backend logs on the clone | 0 tracebacks, 0 secrets, 0 question text, no least-privilege warnings |
+| Frontend `npm test` / `npm run lint` / `npm run build` | 8/8 (1 new source-label test) / 0 problems / built |
+| Live stack during validation | Unchanged (containers, image, data: messages/completed/tickets/accounts 3/7/0/1 before and after) |
+
+Clone method: temporary PostgreSQL 16 container; live data copied with read-only `pg_dump` (signing-key table data excluded); throw-away role passwords and scope secret via migration 005 `--apply --reset-passwords --rotate-scope-secret`; clone-only test passwords; Phase 2 image built under a separate tag; all temporary containers, network and the test image removed afterwards.
+
+### Remaining limitations
+
+- Rule-based vocabulary: unusual phrasings can still fall to the handbook (safe default) and new topics need new terms; covered by the regression table, which should grow with real questions.
+- Third-party detection covers employee IDs, possessives, "does/has/is <name> ...", colleague/manager/their; other phrasings that name a person are not detected. Data exposure is still impossible (reads use only the session employee under RLS), but such an answer would show the user's own records.
+- Mixed answers are composed, not synthesised: two sections rather than one blended paragraph (Step 2C, separate approval).
+- Records-only answers are not LLM-validated (they are produced from rows, not generated). A database timeout still fails the whole mixed request (503) rather than returning only the handbook part.
+- Retrieval failure in a handbook-only question remains a safe HTTP 500 (existing contract and test).
+- Ticket subjects are user-written text and are echoed in ticket answers (unchanged behaviour; not sent to the LLM).
+
+### Manual verification (owner, 23 November 2026)
+
+Performed in the browser against the local Docker stack (frontend http://localhost:8080) after the backend rebuild. All passed:
+
+| Scenario | Result |
+|---|---|
+| Onboarding status and pending tasks ("What is my onboarding status?") | PASS - status summary from the employee's own checklist |
+| Employee-specific leave balances | PASS |
+| Payroll calendar retrieval | PASS |
+| Mixed SQL + RAG leave-policy question | PASS - "From your records" and "From the handbook" sections with separate sources |
+| Cross-employee access refusal | PASS - refused, no other employee's data shown |
+
+Azure integration and deployment remain **ON HOLD**; Groq remains the temporary LLM provider. The limitations listed above remain open and are accepted for the local release.
+
+### Version control readiness (23 November 2026)
+
+Review of all uncommitted changes (Phase 1 least-privilege roles, signed employee scope and read-only SQL path; Phase 2A/2B routing and orchestration; documentation):
+
+- 18 modified and 10 new files, all intended. No migration is outstanding: migration 005 is already applied to the live database and is committed as code for reproducibility.
+- Secret scan: the real values of every key, password and scope secret in `.env` and the external secrets file were searched for in the diff and all new files - **none found**. `.env.example` and `docker-compose.yml` contain only placeholders and variable references.
+- Not in the repository / ignored: `.env`, `data/*.db` (including backups), `data/index/*`, `logs/`, `frontend/dist/`, `node_modules/`, caches. The database backup (`onboardai_local_backups/`) and the secrets file (`onboardai_secrets/phase1.env`) are outside the repository. Temporary validation scripts stayed in the session scratch directory.
+- `git diff --check`: clean after two whitespace fixes (trailing spaces in this file, blank line at end of `backend/services/db_roles.py`).
+- Tests at commit time: backend 445 passed (+77 live-PostgreSQL tests passed on a disposable server), frontend 8/8, lint clean.

@@ -25,3 +25,17 @@ test('JSON-string sources from history are parsed; plain strings pass through', 
 test('chat input limit matches backend ChatRequest max_length', () => {
   assert.equal(CHAT_MAX_LENGTH, 500);
 });
+
+test('Phase 2 hybrid answers: records and handbook sources render as separate labels', () => {
+  assert.equal(
+    formatSources([
+      { file: 'Your records', section: 'Leave balances', score: 1.0 },
+      { file: 'handbook.md', section: '2. Leave Policy > 2.1 Casual Leave', score: 0.81 },
+    ]),
+    'Your records › Leave balances; handbook.md › 2. Leave Policy > 2.1 Casual Leave',
+  );
+  assert.equal(
+    formatSources('[{"file":"Company records","section":"Payroll calendar","score":1.0}]'),
+    'Company records › Payroll calendar',
+  );
+});

@@ -29,6 +29,8 @@ ignore rules print show reveal
 """.split())
 
 SECRET_MIN_LEN = 6
+# Every configured secret an answer must never contain (Phase 1 added the reader password and scope secret).
+LEAK_CHECKED_SECRETS = ("groq_api_key", "pg_password", "pg_reader_password", "pg_scope_secret")
 
 
 # ---------------------------------------------------------------- retrieval gate
@@ -122,7 +124,7 @@ def leak_reasons(answer: str) -> List[str]:
 
     reasons = []
     low = (answer or "").lower()
-    for name in ("groq_api_key", "pg_password"):
+    for name in LEAK_CHECKED_SECRETS:
         secret = getattr(settings, name, "") or ""
         if len(secret) >= SECRET_MIN_LEN and secret.lower() in low:
             reasons.append(f"secret_leak:{name}")

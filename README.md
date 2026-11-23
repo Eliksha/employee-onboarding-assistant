@@ -38,8 +38,8 @@ Detailed progress, decisions and test evidence: [docs/project_plan.md](docs/proj
 flowchart LR
     user["Browser"] --> fe["React SPA<br/>(Vite dev server or nginx in Docker)"]
     fe -->|"/api/* same origin, /api prefix stripped"| api["FastAPI backend<br/>request ID, logging, error handling"]
-    api --> orch{"Orchestrator<br/>intent router"}
-    orch -->|"personal data intent"| edb[("PostgreSQL 16<br/>or SQLite")]
+    api --> orch{"Orchestrator<br/>deterministic router"}
+    orch -->|"records intent (allow-listed)"| edb[("PostgreSQL 16<br/>or SQLite")]
     orch -->|"policy question"| rag["RAG pipeline"]
     rag --> emb["fastembed<br/>BAAI/bge-small-en-v1.5"]
     rag --> idx[("FAISS index<br/>data/index")]
@@ -201,12 +201,12 @@ Notes:
 ## RAG workflow and guardrails
 
 1. **Ingestion** (`backend/services/ingest.py`): `handbook.md` is split by section headings (350 words, 40 overlap); each FAQ becomes one chunk. Chunks are embedded with fastembed and stored in FAISS with source and section metadata (48 chunks).
-2. **Routing** (`orchestrator.py`, `employee_query_router.py`): personal questions (leave balance, assets, checklist, tickets, profile) call approved database functions; policy questions go to RAG.
+2. **Routing** (`orchestrator.py`, `employee_query_router.py`): deterministic precedence rules; personal records (onboarding status, checklist, leave balances, assets, tickets, profile) and the payroll calendar come from approved database functions, policy questions go to RAG, and mixed questions return both parts ("From your records" / "From the handbook") in one saved message. Details: [docs/architecture.md](docs/architecture.md#hybrid-chat-routing-phase-2).
 3. **Retrieval** (`retriever.py`): top 4 passages by cosine similarity.
 4. **Retrieval gate** (`guardrails.py`): top score >= 0.65 proceeds; 0.60-0.65 proceeds only if a distinctive question keyword appears in the retrieved passages; otherwise the fallback is returned without calling the LLM.
 5. **Generation** (`llm.py`): temperature 0; passages are wrapped in `<untrusted_context>` and the system prompt forbids following instructions inside documents, inventing facts, or revealing instructions, keys or credentials. The model replies `NOT_FOUND` when the context is insufficient.
 6. **Output validation** (`guardrails.py`): the answer is rejected (fallback returned) if it contains secrets or system-prompt text, has no citation, cites a section that was not retrieved, or states numbers or email addresses absent from the retrieved passages.
-7. **Response**: `{message_id, answer, sources, found}`, where `sources` lists only the cited passages; the exchange is stored in chat history.
+7. **Response**: `{message_id, answer, sources, found}`, where `sources` lists only the cited passages (plus `Your records` / `Company records` labels for database parts); each exchange is stored in chat history exactly once.
 
 ## Authentication and authorization
 

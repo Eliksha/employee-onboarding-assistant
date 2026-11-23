@@ -1,5 +1,5 @@
 
-"""RAG pipeline: retrieve -> threshold check -> grounded LLM answer -> save."""
+"""RAG pipeline: retrieve -> threshold check -> grounded LLM answer (`answer_policy`) -> save (`answer_question`)."""
 
 import logging
 from typing import Dict, List
@@ -19,11 +19,12 @@ FALLBACK = (
 )
 
 
-def answer_question(
-    question: str,
-    employee_id: str | None = None,
-) -> Dict:
-    """Answer handbook questions using grounded RAG."""
+def answer_policy(question: str) -> Dict:
+    """Grounded handbook answer WITHOUT persistence (used alone and as the handbook part of mixed questions).
+
+    Returns {answer, sources, found, top_score}. Raises llm.LLMUnavailable like the full pipeline;
+    the caller decides how to surface it.
+    """
 
     # Step 1: Retrieve relevant handbook chunks.
     hits = retriever.search(question, settings.top_k)
@@ -61,6 +62,23 @@ def answer_question(
         for h in cited
     ]
 
+    return {
+        "answer": answer,
+        "sources": sources,
+        "found": found,
+        "top_score": round(hits[0]["score"], 3) if hits else 0.0,
+    }
+
+
+def answer_question(
+    question: str,
+    employee_id: str | None = None,
+) -> Dict:
+    """Answer handbook questions using grounded RAG and save the exchange once."""
+
+    result = answer_policy(question)
+    answer, found, sources = result["answer"], result["found"], result["sources"]
+
     # Step 5: Save chat history.
     if employee_id is not None:
         # Save under the selected fictional employee.
@@ -86,5 +104,5 @@ def answer_question(
         "answer": answer,
         "sources": sources,
         "found": found,
-        "top_score": round(hits[0]["score"], 3) if hits else 0.0,
+        "top_score": result["top_score"],
     }
