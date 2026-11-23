@@ -7,7 +7,7 @@
 **Mentor:** Shankhalika Sarkar  
 **Last updated:** 23 November 2026
 
-**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026). M3 (engineering baseline and automated evaluation) committed. M4 (CSV import role, schema dictionary, canonical PDF RAG with versioned index, routing fixes) approved. M5 (feedback and escalation from chat, migration 007 data integrity, API docs restriction, nginx security headers) implemented and verified on disposable databases, a clone of the live database and isolated containers; M4 and M5 not activated, not committed; awaiting owner review.
+**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026). M3 (engineering baseline and automated evaluation) committed. M4 (CSV import role, schema dictionary, canonical PDF RAG with versioned index, routing fixes) approved. M5 (feedback and escalation from chat, migration 007 data integrity, API docs restriction, nginx security headers) implemented and verified on disposable databases, a clone of the live database and isolated containers; **M4 + M5 committed and pushed to `dev` (`cde4538`; all four GitHub CI checks passed) and ACTIVATED on the local Docker stack (23 November 2026)** - see "M4 + M5 Local Activation" at the end of this file. Pending: handbook page-citation check and employee-level authorization check on the activated stack.
 
 ## 1. Milestones
 
@@ -16,7 +16,7 @@
 | M1 — Design | 31 | Charter, architecture, repository, synthetic data | Completed for local prototype |
 | M2 — Backend + AI | 32 | FastAPI, RAG, FAISS, employee data APIs, orchestration | Completed locally (RAG eval 50/50, guardrails); Azure OpenAI migration pending |
 | M3 — UI + Middleware | 33 | React dashboard, chat, checklist, support center, validation | Completed; browser E2E 16/16 |
-| M4 — Deploy + Test | 34 | Docker, Azure deployment, CI/CD, unit/integration/load/security tests | Docker + local testing completed (Step 10); Azure deployment, CI/CD and load tests pending |
+| M4 — Deploy + Test | 34 | Docker, Azure deployment, CI/CD, unit/integration/load/security tests | Docker + local testing completed (Step 10); CI (4 GitHub checks passing) and local load test completed (M3); M4 + M5 local activation completed (23 Nov 2026, `cde4538`); Azure deployment and CD pending |
 | M5 — Wrap-up | After | Runbook, architecture diagrams, storyboard, slides, demo, final repository | Runbook, architecture, demo script, final test report done; slides pending |
 
 ## 2. Scope and Technology Decisions
@@ -24,7 +24,7 @@
 - **Backend:** Python, FastAPI, explicit deterministic agent orchestrator.
 - **AI:** Retrieval-augmented generation over onboarding/policy content, using embeddings and FAISS. Azure OpenAI is the **target** LLM service; Groq was used temporarily during development and must be replaced before Azure completion.
 - **Frontend:** React + Vite, connected to the FastAPI backend.
-- **Persistence:** PostgreSQL 16 (Docker stack and local development); SQLite remains only for the automated test suite and legacy local runs. Least-privilege database roles and row-level security are implemented in code (Phase 1 hardening, end of this file); applying them to the running database is pending approval.
+- **Persistence:** PostgreSQL 16 (Docker stack and local development); SQLite remains only for the automated test suite and legacy local runs. Least-privilege database roles and row-level security are implemented (Phase 1 hardening, end of this file) and activated on the running database (23 November 2026); the data-integrity constraints of migration 007 are also applied (M5).
 - **Cloud target:** Azure only for the final solution. Production persistence, hosting, identity, secrets management, and monitoring require configuration and validation.
 - **Data:** Synthetic fictional employees only (EMP001, EMP002, EMP003). The original employee selector was replaced by sign-in; the employee is always taken from the session.
 - **Authentication:** Implemented locally (21-22 Nov 2026): email/password with Argon2id hashing, server-side sessions in an HttpOnly cookie with absolute and idle expiry, CSRF tokens on all writes, per-email and per-IP login rate limiting, `employee`/`admin` roles. Every employee route serves only the signed-in employee's own records. Not implemented: MFA, password reset, external identity provider (Microsoft Entra ID is a possible later change), persistent rate limiting, HTTPS.
@@ -73,6 +73,7 @@
 6. **Quality assurance:** Add targeted API integration, authorization, failure-path, security, and load tests; record evidence and known limitations.
 7. **CI/CD:** Add automated checks and deployment pipeline, with secrets excluded from source control.
 8. **Final deliverables:** Update architecture diagrams, README, deployment/runbook, demo script, slides, and submission package.
+9. **Post-activation checks on the live local stack (pending):** handbook page-citation verification and employee-level authorization testing (see "M4 + M5 Local Activation").
 
 ## 5. Roles
 
@@ -84,7 +85,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 |---|---|---|
 | Azure access, quota, or model deployment unavailable | Blocks cloud integration/deployment | Confirm subscription, region, roles, and quotas before provisioning; document blocker |
 | Weak identity controls if exposed publicly | Unauthorized access with real data | Local auth, RBAC, CSRF and own-employee checks implemented and tested; add HTTPS, MFA/identity provider and managed secrets before public or real-data use |
-| Over-privileged database access | Full database compromise through any SQL flaw | Least-privilege app/reader roles, read-only SQL-agent transactions, timeouts, row limits, RLS (Phase 1 hardening); live apply pending approval |
+| Over-privileged database access | Full database compromise through any SQL flaw | Least-privilege app/reader roles, read-only SQL-agent transactions, timeouts, row limits, RLS (Phase 1 hardening); activated on the live database 23 Nov 2026 |
 | Hallucinated or unsupported policy answers | Incorrect onboarding guidance | Ground responses in retrieved sources; abstain/escalate when evidence is insufficient; evaluate against test set |
 | Weak retrieval | Irrelevant answers | Evaluate chunking, similarity threshold, top-k, and source coverage |
 | Secret exposure | Credential compromise | Use environment/secret stores; rotate exposed keys; enable scanning; avoid committing `.env` |
@@ -123,7 +124,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 
 ## 10. Next Immediate Step
 
-**Next:** Owner review and commit of M4 + M5; approval to activate them in order (backup, migration 007, host index rebuild, backend + frontend rebuild; optional migration 006 for CSV import) - see the M5 section at the end of this file. Azure milestones (A1 onward) remain ON HOLD.
+**Next:** M4 + M5 are committed (`cde4538`) and activated locally (see "M4 + M5 Local Activation" at the end of this file). Remaining local checks: handbook page-citation verification and employee-level authorization testing on the activated stack; optional migration 006 for CSV import. Azure milestones (A1 onward) remain ON HOLD.
 
 ### PostgreSQL Dependency Update � 20 November 2026
 
@@ -1465,6 +1466,8 @@ New tests: `test_csv_import.py` (29), `test_schema_dictionary.py` (4), `test_pdf
 
 ### Activation (owner approval required; nothing below has been run on the live stack)
 
+**Update 23 November 2026:** steps 1-3 completed as part of the M4 + M5 local activation (versioned index, 65 chunks); step 4 (migration 006) not reported as run; step 5 (page-citation check) still pending - see "M4 + M5 Local Activation".
+
 1. Backup (runbook section 9 pattern).
 2. Rebuild the index on the host: `python -m backend.services.ingest` (adds `data/index/versions/` + `ACTIVE`; the legacy flat files stay for rollback; the running pre-M4 backend ignores them).
 3. Rebuild and recreate only the backend: `docker compose --env-file <secrets file> up -d --build --no-deps backend`.
@@ -1485,7 +1488,7 @@ Rollback: delete `data/index/ACTIVE` (legacy index) and/or rebuild the backend f
 
 ## M5 - User Workflow Completion and Data Integrity (23 November 2026)
 
-**Status: IMPLEMENTED AND VERIFIED (unit, integration, disposable PostgreSQL, clone of the live database, isolated containers); NOT ACTIVATED; NOT COMMITTED.** Baseline: the approved M4 working tree on commit `7e2e866`. Live PostgreSQL (messages/feedback/escalations/completed/accounts 8/0/0/7/1 before and after), the running containers and the active index were not changed. Azure remains **ON HOLD**.
+**Status (update 23 November 2026): COMMITTED (`cde4538`, `dev`, CI 4/4 passed) and ACTIVATED locally - see "M4 + M5 Local Activation" below.** Original status at implementation: **IMPLEMENTED AND VERIFIED (unit, integration, disposable PostgreSQL, clone of the live database, isolated containers); NOT ACTIVATED; NOT COMMITTED.** Baseline: the approved M4 working tree on commit `7e2e866`. Live PostgreSQL (messages/feedback/escalations/completed/accounts 8/0/0/7/1 before and after), the running containers and the active index were not changed. Azure remains **ON HOLD**.
 
 ### Implemented
 
@@ -1531,3 +1534,33 @@ New tests: `test_feedback_escalation.py` (10), `test_m5_hardening.py` (17), `tes
 - Escalations are stored, not delivered (no email/ticket integration); no reviewer UI for feedback or escalations.
 - Browser-level CSP behaviour was checked through headers and same-origin assets, not with a headless browser in this run; the manual step 5 covers it.
 - Dates are still stored as text; `messages`/`feedback` have no RLS (only the app role can read them; the reader cannot).
+
+---
+
+## M4 + M5 Local Activation (23 November 2026)
+
+**Status: COMPLETED on the local Docker stack.** Azure deployment remains **PENDING / ON HOLD**. Results below are as reported by the owner after running the activation; this file records them, it did not run them.
+
+### Completed
+
+| Item | Result |
+|---|---|
+| Version control | M4 + M5 committed and pushed to `dev` (`cde4538`) |
+| CI | All four GitHub CI checks passed (backend tests, PostgreSQL security tests, frontend, Docker build) |
+| Migration 007 (data integrity) | Applied successfully, 13 statements |
+| Post-migration verification | Zero problems; zero orphaned or invalid records |
+| Search index | Versioned FAISS index generated successfully, 65 chunks |
+| Containers | Updated backend and frontend images built and activated; backend, frontend and PostgreSQL containers healthy |
+| Manual functional checks | PASS: login, employee status queries, checklist lookup, sick-leave balance lookup, feedback, escalation |
+
+### Still pending
+
+| Item | Status | Existing evidence |
+|---|---|---|
+| Handbook citation verification on the activated stack (e.g. "Is a cab provided if I stay late at work?" -> `handbook.pdf` with "(p. 3)") | **PENDING** | Automated and isolated only: held-out evaluation citation hit 30/30 with pages (M4); page citation present in the M5 isolated-container check (19/19). Not yet confirmed manually on the live local stack |
+| Employee-level authorization testing on the activated stack (second employee: separate history, cross-employee access refused) | **PENDING** | Automated and isolated only: 125 PostgreSQL role/RLS/isolation tests, cross-employee 403 tests in the backend suite, cross-employee 403 on the clone of the live database. Not yet confirmed manually on the live local stack |
+| Browser CSP check (no CSP violations in DevTools, fonts load) and `/api/docs` returning 404 | Not reported | Headers and 404s verified in isolated containers (M5) |
+| Migration 006 (CSV import role) | Optional; not reported as run | Verified on disposable PostgreSQL and the clone (M4) |
+| Azure deployment (A1 onward) | **PENDING / ON HOLD** | - |
+
+Rollback procedures are unchanged: M5 section above and runbook section 11 (migration 007), M4 section and runbook section 10 (index pointer, migration 006).
