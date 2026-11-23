@@ -7,7 +7,7 @@
 **Mentor:** Shankhalika Sarkar  
 **Last updated:** 23 November 2026
 
-**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026); milestones M3-M5 proposed, awaiting owner approval.
+**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026). M3 (engineering baseline and automated evaluation) implemented and verified locally; GitHub Actions not yet run; awaiting owner review.
 
 ## 1. Milestones
 
@@ -123,7 +123,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 
 ## 10. Next Immediate Step
 
-**Next:** Owner review of the Phase 3 audit ("Phase 3 - Architecture Completion Audit", end of this file) and approval of milestone M3 (engineering and evaluation baseline), then M4 (data and document ingestion) and M5 (user workflow and data integrity). Azure milestones (A1 onward) remain ON HOLD.
+**Next:** Owner review and commit of M3 ("M3 - Engineering Baseline and Automated Evaluation", end of this file); push and confirm the first GitHub Actions run; then approval of M4 (data and document ingestion) and M5 (user workflow and data integrity). Azure milestones (A1 onward) remain ON HOLD.
 
 ### PostgreSQL Dependency Update — 20 November 2026
 
@@ -1334,3 +1334,69 @@ Authentication, sessions, CSRF and authorization (`auth.py`, `security.py`); Pha
 ### P3-I. Status of this audit
 
 No application code, database records or schema, Docker containers or Git history were modified; no migration was run; no dependency was added. Only `docs/project_plan.md` was updated (this section, the status line and the next-step line). Implementation of M3-M5 awaits owner approval.
+
+
+---
+
+## M3 - Engineering Baseline and Automated Evaluation (23 November 2026)
+
+**Status: IMPLEMENTED AND VERIFIED LOCALLY; CI NOT YET RUN ON GITHUB.** Approved by the owner on 23 November 2026. The GitHub Actions workflow has not run yet: it runs after the owner pushes. Its four jobs were executed with the same commands in equivalent clean local containers (results below). The running Docker stack and live PostgreSQL data were not modified (live messages/completed/tickets/accounts 8/7/0/1 before and after; the 5 messages added since the Phase 2 check were written at 14:36-14:40 IST during the owner's manual testing, before M3 started). Azure remains **ON HOLD**. Nothing committed.
+
+### Delivered
+
+| Scope item | Implementation |
+|---|---|
+| Pinned dependencies | `requirements.txt` = 14 runtime packages pinned to the set in the verified Docker image (Python 3.12); `requirements-dev.txt` = runtime + pytest, httpx, locust (pinned). `requests` removed as a direct dependency (unused; still installed via fastembed). Local venv aligned; `pip check` clean. The runtime image no longer contains pytest/locust (846 MB vs 916 MB) |
+| CI | `.github/workflows/ci.yml`: `backend-tests` (Python 3.12, pinned install, index built from `data/raw`, full suite, fails on any skip, held-out routing eval), `postgres-security-tests` (disposable `postgres:16-alpine`, per-job random masked password, 77-test suite, fails on skips), `frontend` (Node 24, `npm ci`/test/lint/build), `docker-build` (compose config, backend + frontend image builds, pip check, import smoke test, no dev tools in image, non-root uid). `permissions: contents: read`; only official `actions/*`; no secrets, no push, no deployment |
+| Held-out dataset | `tests/eval/heldout_questions.json`: 62 questions (16 records, 16 handbook, 10 mixed, 6 ambiguous, 8 unauthorized, 6 out-of-scope), written before measurement and not used to tune the router; handbook keys/sections verbatim from `data/raw`; records expectations computed from the database at run time |
+| Evaluation | `scripts/hybrid_eval.py`: `--routing-only` (deterministic, CI), in-process mode (isolated seeded SQLite copy + real index + Groq), `--base-url` HTTP mode (ground truth from REST endpoints). Metrics: routing accuracy and confusion, third-party recall/false positives, records correctness, refusals, leak markers, retrieval hit@k/MRR on the text actually sent to retrieval, groundedness, false fallbacks, citation hit/precision, mixed correctness, out-of-scope fallback, errors, latency p50/p95 per route kind |
+| Load test | `tests/load/locustfile.py` + `tests/load/run_isolated_load_test.sh` (throw-away image, synthetic-seed PostgreSQL, migration 005 with random secrets, least-privilege backend, synthetic login; everything removed on exit) |
+| Tests | `tests/unit/test_hybrid_eval.py` (18): dataset integrity (verbatim KB keys, real sections, absent out-of-scope terms, no reuse of router/rag_eval questions), grading logic, percentile, routing regression floor (>= measured 0.967, no third-party false positives) |
+| Docs | `docs/hybrid_eval_report.md` (generated), `docs/load_test_report.md`, README (install, testing, CI, limitations, documentation), this section; `.gitattributes` (`*.sh` keeps LF), `.gitignore` (`loadtest-output/`) |
+
+### Measured results (23 November 2026; one run each; Groq `qwen/qwen3.8-27b`)
+
+| Metric | Result |
+|---|---|
+| Routing accuracy, held-out (kind + intents + refusal flag) | **60/62 (96.8%)**; records 16/16, handbook 16/16, ambiguous 6/6, out-of-scope 6/6, mixed 9/10, unauthorized 7/8 |
+| Third-party detection | recall 7/8; 0 false positives |
+| Records answers correct (records + mixed) | 25/26 |
+| Unauthorized questions refused | 7/8; **0** answers containing another employee's data marker |
+| Retrieval hit@4 / MRR (query actually sent) | 27/30 / 0.861 |
+| Grounded handbook answers / false fallbacks | 26/30 / 4/30 |
+| Citation hit / precision | 26/30 / 1.00 |
+| Mixed answers fully correct | 7/10 |
+| Out-of-scope fallback | 6/6 |
+| Errors after retries | 0 |
+| End-to-end latency, HTTP, PostgreSQL + least-privilege roles (p50 / p95 ms) | records 152 / 238 (n=24); handbook 374 / 2,443 (n=29); mixed 478 / 804 (n=9); all 329 / 1,440 |
+| Load test (10 users, 60 s, records chat + REST) | 281 requests (CSV), **0 failures**, aggregate median 81 ms / p95 200 ms, records chat median 170 ms / p95 210 ms, about 4.8 req/s; 0 5xx, 0 secrets in logs |
+
+The in-process run reproduced every quality metric and the same five failing questions. Against the problem-statement criteria: in-scope handbook answers 26/30 (87%, target >= 80%), out-of-scope fallback 6/6 (target 100%), end-to-end p95 1.4 s overall and 2.4 s for handbook answers (target "typically < 5 s").
+
+**Failing questions (reported, not fixed in M3):** M10 "How many sick days do I have left ..." - "sick days" is not leave vocabulary, records part dropped. U04 "Which laptop is assigned to Meera?" - third party not detected; shows the user's own laptop (no data leak). M01 / M06 - the policy clause sent to retrieval is a pronoun-only fragment ("apply for it", "carry them forward"), so the handbook part falls back although the router inherited the topic for classification. H14 "Is a cab provided if I stay late at work?" - retrieval miss (expected section not in the top 4).
+
+### Verification
+
+| Check | Result |
+|---|---|
+| Backend suite, local Python 3.14 with pinned versions | 463 passed (+77 PostgreSQL tests skipped locally, run below) |
+| CI `backend-tests` equivalent (clean `python:3.12-slim`, snapshot of tracked + new files only, no `.env`, index built from `data/raw`) | 463 passed, **0 skipped**; routing 60/62 |
+| CI `postgres-security-tests` equivalent (disposable `postgres:16-alpine`, random password) | 77 passed, 0 skipped |
+| CI `frontend` equivalent (clean `node:24-alpine`) | npm ci ok; 8/8 tests; lint clean; build ok |
+| CI `docker-build` equivalent | compose config ok; both images built; pip check clean; import ok; no pytest/locust in image; uid 10001 |
+| Workflow file | Parsed (4 jobs, read-only permissions, triggers push/PR/dispatch). `actionlint` was not run: the attempt was blocked by the local permission policy |
+
+### Remaining risks and limitations
+
+- CI has not run on GitHub yet; runner differences (network to Hugging Face for the model download, action versions) can still fail the first run.
+- Transitive dependencies are not locked; only direct dependencies are pinned.
+- The evaluation is one run on a 62-question set with lexical grading; LLM answers can vary between runs; p95 values with n < 30 are indicative.
+- The load test is smoke-level (one host, client and server on the same machine, no LLM questions, one account).
+- The router and retrieval findings above remain open for a later approved milestone.
+
+### Manual verification for the owner
+
+1. `pip install -r requirements-dev.txt`, then `python -m pytest -q` (expect 463 passed, 77 skipped without a PostgreSQL DSN).
+2. `python -m scripts.hybrid_eval --routing-only` (expect 60/62).
+3. Optional: `WITH_EVAL=1 bash tests/load/run_isolated_load_test.sh loadtest-output` (about 4 minutes; uses Groq for the evaluation part; removes everything it creates).
+4. After pushing: open the repository's Actions tab and confirm all four jobs pass; only then record CI as green.

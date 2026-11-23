@@ -1,0 +1,137 @@
+# OnboardAI continuous integration (M3). Verification only: no deployment, no image push, no real secrets.
+# All data is synthetic; the LLM is mocked in tests; PostgreSQL runs in a disposable container
+# with a password generated per job.
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"      # same as the backend Docker image (python:3.12-slim)
+  NODE_VERSION: "24"          # same as frontend/Dockerfile (node:24-alpine)
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  backend-tests:
+    name: Backend unit + integration tests (SQLite, LLM mocked)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+      - name: Build the FAISS index from the synthetic documents in data/raw
+        # data/index is git-ignored; the real-embedding retrieval tests need it (downloads the embedding model).
+        run: python -m backend.services.ingest
+      - name: Run the test suite
+        run: >
+          python -m pytest -q -rs -p no:cacheprovider --junitxml=junit-backend.xml
+          --ignore=tests/integration/test_postgres_roles.py
+      - name: Fail on unexpected skips
+        run: |
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          suite = ET.parse("junit-backend.xml").getroot().find("testsuite")
+          tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+          print(f"tests={tests} failures={suite.get('failures')} errors={suite.get('errors')} skipped={skipped}")
+          sys.exit(1 if skipped else 0)
+          PY
+      - name: Held-out routing evaluation (deterministic)
+        run: python -m scripts.hybrid_eval --routing-only
+
+  postgres-security-tests:
+    name: Live PostgreSQL role, RLS and isolation-attack tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run against a disposable PostgreSQL 16 container
+        run: |
+          set -euo pipefail
+          PG_PW=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
+          echo "::add-mask::$PG_PW"
+          docker run -d --name onboardai-ci-pg -e POSTGRES_PASSWORD="$PG_PW" -p 127.0.0.1:55439:5432 postgres:16-alpine
+          for i in $(seq 1 60); do
+            docker exec onboardai-ci-pg pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1 && break
+            sleep 1
+          done
+          sleep 2
+          export ONBOARDAI_PG_TEST_ADMIN_DSN="postgresql://postgres:${PG_PW}@127.0.0.1:55439/postgres"
+          python -m pytest -q -rs -p no:cacheprovider --junitxml=junit-postgres.xml tests/integration/test_postgres_roles.py
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          suite = ET.parse("junit-postgres.xml").getroot().find("testsuite")
+          tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+          print(f"tests={tests} skipped={skipped}")
+          sys.exit(1 if skipped or tests == 0 else 0)
+          PY
+      - name: Remove the disposable database
+        if: always()
+        run: docker rm -f onboardai-ci-pg || true
+
+  frontend:
+    name: Frontend tests, lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+
+  docker-build:
+    name: Docker image build verification (no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate docker-compose.yml
+        run: DOCKER_PG_PASSWORD=ci-placeholder-not-a-secret docker compose config --quiet
+      - name: Build backend image
+        run: docker build -t onboardai-backend:ci .
+      - name: Build frontend image
+        run: docker build -t onboardai-frontend:ci ./frontend
+      - name: Smoke-check the backend image
+        run: |
+          docker run --rm onboardai-backend:ci python -m pip check
+          docker run --rm onboardai-backend:ci python -c "import backend.main; print('backend imports ok')"
+          # Development tools must not be shipped in the runtime image.
+          docker run --rm onboardai-backend:ci python -c "import importlib.util, sys; dev = [m for m in ('pytest', 'locust') if importlib.util.find_spec(m)]; print('dev tools in image:', dev); sys.exit(1 if dev else 0)"
+          docker run --rm onboardai-backend:ci id -u | grep -qx 10001

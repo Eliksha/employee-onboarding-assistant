@@ -9,3 +9,5 @@ __pycache__/
 data/index/*
 !data/index/.gitkeep
 logs/
+# Local load-test / evaluation output (results are summarised in docs/)
+loadtest-output/

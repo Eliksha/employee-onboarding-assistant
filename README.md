@@ -63,7 +63,7 @@ More detail, including the RAG decision flow: [docs/architecture.md](docs/archit
 | LLM | OpenAI-compatible client against Groq (temporary); Azure OpenAI planned |
 | Database | PostgreSQL 16 (psycopg2); SQLite fallback |
 | Containers | Docker, Docker Compose |
-| Testing | pytest, Node test runner, RAG evaluation script |
+| Testing | pytest, Node test runner, locust (load test), RAG and held-out hybrid evaluation scripts, GitHub Actions CI |
 
 ## Repository layout
 
@@ -73,8 +73,9 @@ frontend/           React + Vite app, Dockerfile, nginx.conf
 data/raw/           Synthetic handbook, FAQs, checklist (knowledge base)
 data/index/         FAISS index (generated, git-ignored)
 docker/postgres/    PostgreSQL schema and synthetic seed used by Docker
-scripts/            rag_eval.py (RAG evaluation), run_test_questions.py
-tests/              unit/ and integration/ pytest suites
+scripts/            rag_eval.py (RAG evaluation), hybrid_eval.py (held-out hybrid evaluation), run_test_questions.py
+tests/              unit/ and integration/ pytest suites, eval/ (held-out dataset), load/ (locust load test)
+.github/workflows/  ci.yml (tests, security suite, frontend, Docker build; no deployment)
 docs/               Project plan, architecture, RAG evaluation report, test material
 Dockerfile, docker-compose.yml, .dockerignore, .env.example
 ```
@@ -119,7 +120,7 @@ Prerequisites: Python 3.12+ (verified with 3.12 in Docker and 3.14 locally), Nod
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # pinned runtime + test tools (the Docker image uses requirements.txt only)
 Copy-Item .env.example .env      # then edit .env locally
 ```
 
@@ -269,13 +270,19 @@ Error behaviour: 401 without a valid session; 403 for another employee's data, a
 
 ## Testing
 
+Install the pinned development tools first: `pip install -r requirements-dev.txt` (runtime dependencies are in `requirements.txt`, which is all the Docker image installs).
+
 | Command | What it covers | Latest verified result |
 |---|---|---|
-| `python -m pytest -q` | Unit and integration tests (RAG, guardrails, API, error handling, logging, frontend contract, Docker config). Always uses a temporary SQLite database; PostgreSQL connections are blocked in tests. | **145 passed** (21 Nov 2026), including 61 authentication/authorization tests |
-| `cd frontend; npm test` | Frontend helper tests (Node test runner) | **7 passed** |
-| `cd frontend; npm run lint` | ESLint (React hooks rules) | **0 errors, 0 warnings** |
-| `cd frontend; npm run build` | Production build | Succeeded |
-| `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs `GROQ_API_KEY`, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (20 Nov 2026, live Groq) |
+| `python -m pytest -q` | Unit and integration tests (routing, orchestration, RAG, guardrails, auth, isolation, API, error handling, logging, frontend contract, Docker config, evaluation dataset). Always uses a temporary SQLite database; PostgreSQL connections are blocked. The real-embedding retrieval tests need the FAISS index (`python -m backend.services.ingest`). | **463 passed, 0 skipped** (23 Nov 2026, Python 3.12 in a clean container, CI-equivalent) |
+| `ONBOARDAI_PG_TEST_ADMIN_DSN=... python -m pytest tests/integration/test_postgres_roles.py` | Live PostgreSQL roles, RLS, signed scope and isolation attacks against a **disposable** local server (see the file header) | **77 passed** (23 Nov 2026) |
+| `cd frontend; npm test` / `npm run lint` / `npm run build` | Frontend helper tests, ESLint, production build | **8 passed** / 0 problems / built |
+| `python -m scripts.hybrid_eval --routing-only` | Held-out routing accuracy (62 questions, deterministic; also a CI regression floor) | **60/62 (96.8%)** |
+| `python -m scripts.hybrid_eval --report docs/hybrid_eval_report.md` | Held-out end-to-end evaluation: routing, records correctness, refusals, retrieval, grounding, citations, mixed answers, fallbacks, latency by route kind (isolated SQLite copy; Groq for handbook answers) | See [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md) |
+| `bash tests/load/run_isolated_load_test.sh` | Small load test (locust) against a throw-away stack with least-privilege roles; `WITH_EVAL=1` also runs the HTTP evaluation | See [docs/load_test_report.md](docs/load_test_report.md) |
+| `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs `GROQ_API_KEY`, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (20 Nov 2026, live Groq; before Phases 1-2) |
+
+**Continuous integration** (`.github/workflows/ci.yml`, on pushes to `dev`/`main`, pull requests and manual runs): backend tests on Python 3.12 with the index built from `data/raw` and a no-skip check; the live PostgreSQL security suite against a disposable `postgres:16-alpine` container with a per-job random password; frontend test/lint/build on Node 24; Docker image builds with smoke checks (pip check, import, no dev tools in the image, non-root user) and `docker compose config`. No deployment, no image push, no real secrets (the LLM is mocked). The workflow's steps were verified in equivalent local containers; its first GitHub Actions run happens after the owner pushes it.
 
 Additional checks performed during development (scripts not in the repository): browser end-to-end tests in headless Chrome (16/16 against both the Vite dev server and the Docker stack), Docker integration, restart and persistence checks (18/18 and 4/4), workflow and failure-case sweeps. Step 10 re-ran all of them on 21 Nov 2026, including a live RAG evaluation (50/50). See [docs/final_local_test_report.md](docs/final_local_test_report.md). After authentication was added (21 Nov 2026): browser sign-in/workspace checks 13/13 on both the Docker stack and the Vite dev server, Docker auth checks through nginx 20/20 (including live Groq chat after sign-in), and sessions/accounts persisted across backend restart and full down/up (3/3 each).
 
@@ -303,7 +310,9 @@ Groq is used temporarily because Azure access is not yet available. The planned 
 - Synthetic, single-company knowledge base (48 chunks); retrieval misses some paraphrased questions (documented in the RAG report).
 - Grounding checks are lexical; paraphrased unsupported claims without numbers or emails can pass.
 - PostgreSQL schema is provided as a snapshot (`docker/postgres/`); migrations in `backend/migrations/` target SQLite only.
-- `requirements.txt` is unpinned and includes test tools; no HTTPS; no CI pipeline configured yet (`.github/workflows/` is empty); no load tests yet (`tests/load/` is empty).
+- Direct dependencies are pinned (`requirements.txt`, `requirements-dev.txt`); transitive dependencies are not locked. No HTTPS.
+- The load test is a small smoke-level run (10 users, 60 s, records questions only); see [docs/load_test_report.md](docs/load_test_report.md).
+- Held-out evaluation findings (not yet fixed): "sick days" is not recognised as leave vocabulary; "assigned to <name>" is not detected as a third-party request; follow-up clauses that only use a pronoun ("apply for it") are sent to retrieval without their topic, so the handbook part can fall back. See [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md).
 - API docs (`/docs`, `/openapi.json`) are publicly reachable; nginx sends no security headers.
 
 ## Documentation
@@ -314,6 +323,8 @@ Groq is used temporarily because Azure access is not yet available. The planned 
 - [docs/demo_script.md](docs/demo_script.md) - 10-minute demonstration walkthrough
 - [docs/architecture.md](docs/architecture.md) - architecture and RAG flow
 - [docs/rag_eval_report.md](docs/rag_eval_report.md) - latest RAG evaluation output
+- [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md) - held-out hybrid chat evaluation (routing, records, grounding, citations, latency)
+- [docs/load_test_report.md](docs/load_test_report.md) - load test environment and results
 - [docs/problem_statement.md](docs/problem_statement.md) - capstone problem statement
 - [frontend/README.md](frontend/README.md) - frontend notes
 
