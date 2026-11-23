@@ -152,7 +152,7 @@ The migration runs as the owner account from `PG_USER`/`PG_PASSWORD` inside the 
 
 ### Durable secrets file (used for the live activation)
 
-`$env:` variables last for one PowerShell session. If a later `docker compose up` runs without `DOCKER_PG_APP_*` / `DOCKER_PG_READER_*` / `DOCKER_PG_SCOPE_SECRET`, the backend silently falls back to the owner account. The live stack therefore keeps these values in a file **outside the repository**, readable only by the Windows account that runs Docker:
+`$env:` variables last for one PowerShell session. If a later `docker compose up` runs without `DOCKER_PG_APP_*` / `DOCKER_PG_READER_*` / `DOCKER_PG_SCOPE_SECRET`, the backend falls back to the owner account, which it now **refuses** (fail closed: superuser/BYPASSRLS roles are rejected at startup, see `ALLOW_PRIVILEGED_DB_CONNECTION` below). The live stack therefore keeps these values in a file **outside the repository**, readable only by the Windows account that runs Docker:
 
 `C:\Users\Administrator\Desktop\employee-onboarding-assistant-day31\onboardai_secrets\phase1.env` (ACL: owner only, inheritance disabled)
 
@@ -168,7 +168,7 @@ docker compose --env-file $secrets <command>      # e.g. ps, up -d --no-deps bac
 
 In Windows PowerShell 5.1, compose progress lines on stderr (`Container ... Creating`) may appear as `NativeCommandError`. They are not failures; check the exit code.
 
-**Rollback:** remove (or comment out) the `DOCKER_PG_APP_*`, `DOCKER_PG_READER_*` and `DOCKER_PG_SCOPE_SECRET` lines in the secrets file, clear them from the shell, and run `docker compose --env-file $secrets up -d --no-deps backend`. Equivalently, without the file: unset the `DOCKER_PG_APP_*`, `DOCKER_PG_READER_*` and `DOCKER_PG_SCOPE_SECRET` variables and run `docker compose up -d --no-deps backend`. The backend connects as the owner again; the owner bypasses row-level security, so nothing else changes. The roles, key and policies can stay in place.
+**Rollback:** remove (or comment out) the `DOCKER_PG_APP_*`, `DOCKER_PG_READER_*` and `DOCKER_PG_SCOPE_SECRET` lines in the secrets file, clear them from the shell, and run `docker compose --env-file $secrets up -d --no-deps backend`. Equivalently, without the file: unset the `DOCKER_PG_APP_*`, `DOCKER_PG_READER_*` and `DOCKER_PG_SCOPE_SECRET` variables and run `docker compose up -d --no-deps backend`. **Superseded (pre-Azure remediation S2):** the backend no longer starts as the owner, so this rollback now ends in a clear startup refusal. `docker-compose.yml` pins `ALLOW_PRIVILEGED_DB_CONNECTION` to `false`; the override is honoured only for local non-Docker runs with `APP_ENV=development`. Roll back by fixing the role credentials (`--apply --reset-passwords`), not by switching to the owner.
 
 **Rotation:** role passwords with `--apply --reset-passwords`. Scope key with `--apply --rotate-scope-secret` and a new `ONBOARDAI_SCOPE_SECRET`, then immediately set the same value in `DOCKER_PG_SCOPE_SECRET` and recreate the backend. Between the two steps, employee-scoped reads return no rows (fail closed). Keep the secret in a password manager; losing it only requires a rotation.
 
@@ -251,3 +251,55 @@ Every answer in the AI Assistant has Helpful / Not helpful buttons (`POST /feedb
 - `/docs`, `/redoc` and `/openapi.json` are served only when `APP_ENV=development` (local runs), or when `API_DOCS=true` is set explicitly. `docker-compose.yml` sets `API_DOCS: "false"`; nginx additionally answers 404 for `/api/docs`, `/api/redoc` and `/api/openapi.json`.
 - nginx adds to every response (pages and `/api`): Content-Security-Policy (`default-src 'self'`, scripts from self only, styles from self + Google Fonts, fonts from fonts.gstatic.com, `frame-ancestors 'none'`, `object-src 'none'`), X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy no-referrer, Permissions-Policy (camera, microphone, geolocation, payment disabled), Cross-Origin-Opener-Policy same-origin; `server_tokens off`. Check: `curl -sI http://localhost:8080/ | findstr /i "content-security x-frame x-content referrer permissions"`.
 - If the page renders without styles after a change to fonts or external assets, the CSP is the first thing to check (browser console).
+
+## 12. PostgreSQL backup and isolated restore
+
+The dump contains the whole `onboardai` database: schema, data, grants, row-level security policies, the employee-scope **signing key** (`onboardai_private.scope_key`), account password hashes and session hashes. Treat every dump as a secret: keep it in `backups\` (git-ignored and Docker-ignored) or outside the repository, never share or commit it. Role definitions and role passwords are server-level and not in the dump; they are in the secrets file (section 9) and are recreated by migration 005.
+
+**Never use `>` or `|` to write a dump in Windows PowerShell 5.1** - it re-encodes binary output as UTF-16 and the file becomes unusable (`backups\onboardai_pre_m5.dump` is such a file: `pg_restore` reports "not a valid archive"). Write the file inside the container with `-f` and copy it out with `docker compose cp`.
+
+### Backup (read-only for the live database)
+
+```powershell
+$secrets = 'C:\Users\Administrator\Desktop\employee-onboarding-assistant-day31\onboardai_secrets\phase1.env'
+Get-Content $secrets | Where-Object { $_ -match '^[A-Z_]+=' } | ForEach-Object { $k, $v = $_ -split '=', 2; Set-Item "Env:$k" $v }
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$dump = "backups\onboardai_$stamp.dump"
+New-Item -ItemType Directory -Force backups | Out-Null
+docker compose --env-file $secrets exec -T db pg_dump -U onboardai -d onboardai -Fc -f /tmp/onboardai_backup.dump
+docker compose --env-file $secrets cp db:/tmp/onboardai_backup.dump $dump
+docker compose --env-file $secrets exec -T db rm -f /tmp/onboardai_backup.dump
+(Get-FileHash $dump -Algorithm SHA256).Hash        # record it with the backup
+```
+
+### Verify the archive (no database involved)
+
+```powershell
+docker run --rm --network none -v "${PWD}\backups:/b:ro" postgres:16-alpine pg_restore --list "/b/onboardai_$stamp.dump" | Select-String "TABLE DATA"
+```
+
+Expect 13 `TABLE DATA` entries, including `onboardai_private scope_key`, `public user_accounts` and `public user_sessions`.
+
+### Isolated restore test (disposable server; the live database and its volume are never touched)
+
+```powershell
+$rpw = [guid]::NewGuid().ToString('N')            # throwaway password for the disposable server only
+$attrs = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
+docker network create --internal onboardai-restore-net
+docker run -d --name onboardai-restore --network onboardai-restore-net -e POSTGRES_PASSWORD=$rpw postgres:16-alpine
+do { Start-Sleep 2 } until ((docker exec onboardai-restore pg_isready -U postgres -h 127.0.0.1) -match 'accepting')
+docker exec onboardai-restore psql -q -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE onboardai LOGIN SUPERUSER PASSWORD '$rpw'" -c "CREATE ROLE onboardai_app $attrs" -c "CREATE ROLE onboardai_reader $attrs" -c "CREATE DATABASE onboardai OWNER onboardai"
+# if migration 006 was applied, also: -c "CREATE ROLE onboardai_importer $attrs"
+docker cp $dump onboardai-restore:/tmp/restore.dump
+docker exec onboardai-restore pg_restore -U onboardai -d onboardai --exit-on-error /tmp/restore.dump      # exit code 0 expected
+# Signing key, roles, grants and RLS must verify against the REAL scope secret (exit 0, key_matches_secret: true):
+docker run --rm --network onboardai-restore-net -e DB_BACKEND=postgresql -e PG_HOST=onboardai-restore -e PG_DATABASE=onboardai -e PG_USER=onboardai -e PG_PASSWORD=$rpw -e ONBOARDAI_SCOPE_SECRET employee-onboarding-assistant-backend python backend/migrations/005_least_privilege_roles.py --verify
+# Data-integrity constraints (exit 0):
+docker run --rm --network onboardai-restore-net -e DB_BACKEND=postgresql -e PG_HOST=onboardai-restore -e PG_DATABASE=onboardai -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD=$rpw employee-onboarding-assistant-backend python backend/migrations/007_data_integrity.py --verify
+# Clean up
+docker rm -f onboardai-restore; docker network rm onboardai-restore-net
+```
+
+### Recovery (owner decision; never restore into the running database)
+
+Restore into a **new** Compose project and volume (for example `docker compose -p onboardai-recovered ...`), run the checks above against it, provision role passwords with `005 --apply --reset-passwords` (same `ONBOARDAI_SCOPE_SECRET`, never `--rotate-scope-secret`, so existing signatures and the restored key stay valid), then switch traffic. Do not run `docker compose down -v`, `DROP DATABASE` or `pg_restore --clean` against the active `onboardai` database.

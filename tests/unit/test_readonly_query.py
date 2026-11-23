@@ -421,11 +421,15 @@ def test_reader_without_valid_scope_secret_refuses_to_start(monkeypatch, env, se
 
 
 def test_role_policy_only_warns_in_development(monkeypatch, caplog):
+    # Missing reader role: warning only in development. A superuser needs the explicit development override.
     monkeypatch.setattr(settings, "app_env", "development")
     monkeypatch.setattr(settings, "pg_reader_user", "")
+    monkeypatch.setattr(settings, "allow_privileged_db_connection", True)
     with caplog.at_level(logging.WARNING, logger="app"):
         issues = db.enforce_role_policy(app_is_superuser=True)
     assert len(issues) == 2 and "superuser" in caplog.text
+    monkeypatch.setattr(settings, "allow_privileged_db_connection", False)
+    assert len(db.enforce_role_policy(app_is_superuser=False)) == 1
     monkeypatch.setattr(settings, "pg_reader_user", "onboardai_reader")
     monkeypatch.setattr(settings, "pg_scope_secret", SECRET)
     assert db.enforce_role_policy(app_is_superuser=False) == []

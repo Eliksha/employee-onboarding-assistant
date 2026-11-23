@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     health_db_timeout_seconds: int = 3
     # Server-side statement timeout for application (read-write) connections; 0 disables it.
     pg_statement_timeout_ms: int = 10000
+    # The app refuses to start as a superuser/BYPASSRLS role. Local-development escape hatch only: honoured
+    # solely with APP_ENV=development; docker-compose.yml pins it to false.
+    allow_privileged_db_connection: bool = False
 
     # SQL-agent / read-only data access (see backend/services/readonly_query.py).
     # PG_READER_USER is the least-privilege SELECT-only role created by

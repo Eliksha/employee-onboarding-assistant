@@ -180,6 +180,8 @@ docker compose up -d --build --wait
 docker compose ps
 ```
 
+The backend **refuses to start as the database owner** (a superuser) - it needs the least-privilege roles. On a new database, start only `db`, provision the roles once with migration 005 (`docker compose run --rm --no-deps ... backend python backend/migrations/005_least_privilege_roles.py --apply`, runbook section 9), keep the role passwords and scope secret in a secrets file outside the repository, and start the stack with `docker compose --env-file <secrets file> up -d --build --wait`. Migrations and `manage_accounts` are unaffected (they run as separate commands).
+
 Create accounts in the container database (passwords are entered at a hidden prompt; nothing is created automatically):
 
 ```powershell

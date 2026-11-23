@@ -282,4 +282,11 @@ def test_backend_refuses_to_start_on_a_database_without_migration_007(server, mo
     with pytest.raises(RuntimeError, match="migration 007"):
         db.init_db()
     migrate(name)
+    # S2: the admin DSN is a superuser - refused by default (fail closed), allowed only by the development override.
+    with pytest.raises(RuntimeError, match="privileged role"):
+        db.init_db()
+    monkeypatch.setattr(settings, "allow_privileged_db_connection", True)
     db.init_db()  # starts once migrated
+    monkeypatch.setattr(settings, "app_env", "production")
+    with pytest.raises(RuntimeError, match="privileged role"):
+        db.init_db()  # the override is ignored outside development

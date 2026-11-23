@@ -17,3 +17,6 @@ docs
 scripts
 docker
 *.zip
+# Database backups (never part of a build context)
+backups
+*.dump

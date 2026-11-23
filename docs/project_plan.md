@@ -124,7 +124,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 
 ## 10. Next Immediate Step
 
-**Next:** M4 + M5 are committed (`cde4538`) and activated locally (see "M4 + M5 Local Activation" at the end of this file). Remaining local checks: handbook page-citation verification and employee-level authorization testing on the activated stack; optional migration 006 for CSV import. Azure milestones (A1 onward) remain ON HOLD.
+**Next:** M4 + M5 are committed (`cde4538`) and activated locally (see "M4 + M5 Local Activation" at the end of this file). Pre-Azure remediation of the three HIGH audit findings (S1 backups ignored, S2 fail closed on privileged database roles, D3 tested backup/restore) implemented and verified, not committed; S2 takes effect on the next backend rebuild (see "Pre-Azure Remediation" at the end of this file). Remaining local checks: handbook page-citation verification and employee-level authorization testing on the activated stack; optional migration 006 for CSV import. Azure milestones (A1 onward) remain ON HOLD.
 
 ### PostgreSQL Dependency Update — 20 November 2026
 
@@ -1564,3 +1564,31 @@ New tests: `test_feedback_escalation.py` (10), `test_m5_hardening.py` (17), `tes
 | Azure deployment (A1 onward) | **PENDING / ON HOLD** | - |
 
 Rollback procedures are unchanged: M5 section above and runbook section 11 (migration 007), M4 section and runbook section 10 (index pointer, migration 006).
+
+---
+
+## Pre-Azure Remediation - HIGH Audit Findings S1, S2, D3 (23 November 2026)
+
+**Status: IMPLEMENTED AND VERIFIED; NOT COMMITTED.** Source: read-only pre-Azure readiness audit (23 November 2026; CONDITIONAL GO, no critical findings). Live PostgreSQL was only read (pg_dump, SELECT); its data and the running containers were not changed. Azure remains **ON HOLD**.
+
+| Finding | Change | Evidence |
+|---|---|---|
+| S1 - database dumps could be committed (repository is public) | `.gitignore` and `.dockerignore`: `backups/`, `*.dump`. Existing dumps not moved, changed or opened | `git check-ignore` matches both existing dumps and a new one; `git status` shows no `backups/` entry |
+| S2 - app could run as the PostgreSQL superuser | `db.enforce_role_policy` refuses a superuser **or BYPASSRLS** application role in every environment (startup reads `rolsuper, rolbypassrls`; unknown attributes also refused). `ALLOW_PRIVILEGED_DB_CONNECTION=true` is a local-development escape hatch honoured only with `APP_ENV=development`; `docker-compose.yml` pins it to `false`. Migrations, `manage_accounts`, CSV import unchanged (they never call the startup check) | 23 new unit tests (`tests/unit/test_privileged_db_connection.py`: all environments, both flags, override ignored outside development, no credentials in the message, startup path, compose pin); live PostgreSQL test (`test_postgres_m5.py`): superuser refused, development override accepted, override ignored in production. Rebuilt image on the restored copy: owner refused, override + `APP_ENV=production` refused, `onboardai_app` starts. Live backend already uses `onboardai_app` (not superuser, not BYPASSRLS) |
+| D3 - no PostgreSQL backup/restore procedure | `docs/runbook.md` section 12: PowerShell 5.1-safe backup (`pg_dump -Fc -f` in the container + `docker compose cp`; no `>` redirection), archive check, isolated restore test on an internal Docker network, recovery rules (new project/volume only, same scope secret, never into the active database) | See below |
+
+**Backup and restore results (actually executed):**
+
+| Check | Result |
+|---|---|
+| Existing `backups/onboardai_pre_m5.dump` | **Not a valid archive** (UTF-16 byte-order mark: written through PowerShell `>`). Kept unchanged; documented as unusable |
+| Existing `backups/onboardai_pre_m5_valid.dump` | Valid custom archive (13 tables incl. signing key); restored into a disposable server: exit 0; signing key and account password hashes identical to live; pre-M5 schema (8/0/0 rows, no 007 constraints) as expected |
+| New backup with the documented PowerShell commands (`backups/onboardai_20261123_181908.dump`, 44,501 bytes) | Archive listing: 13 `TABLE DATA` entries incl. `onboardai_private.scope_key`, `user_accounts`, `user_sessions` |
+| Restore of the new backup (disposable server, internal network) | `pg_restore --exit-on-error` exit 0; **13/13 tables identical to live** (row count + content checksum, values not printed); migration 005 `--verify` with the real scope secret exit 0 (`key_matches_secret: true`; app/reader cannot reach the key); migration 007 `--verify` exit 0; app role startup OK; RLS-scoped reads EMP001 15 rows = live, 0 cross-employee rows |
+| Cleanup / live | Disposable containers, network and test image removed; live stack healthy, row counts unchanged |
+
+**Tests:** backend suite **568 passed** (545 + 23 new); PostgreSQL suites on a disposable server **125 passed**; `docker compose config` valid.
+
+**Behaviour change to note:** on a brand-new Docker database the backend no longer starts as the owner; provision the roles with migration 005 first (README / runbook section 9). The Phase 1 rollback "switch back to the owner account" is superseded (runbook section 9).
+
+**Activation (owner):** rebuild the backend with the secrets file (`docker compose --env-file <secrets file> up -d --build --no-deps backend`); it must start as `onboardai_app`. Store backups outside the repository or keep them in the ignored `backups/` folder with owner-only access.

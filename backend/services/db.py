@@ -104,15 +104,36 @@ def check_database() -> bool:
 LEAST_PRIVILEGE_HINT = "Provision roles with backend/migrations/005_least_privilege_roles.py (see docs/runbook.md)."
 
 
-def enforce_role_policy(app_is_superuser: bool) -> list[str]:
-    """PostgreSQL role hygiene at startup: refuse in production, warn otherwise. Returns the issues."""
+PRIVILEGED_CONNECTION = (
+    "Refusing to start: the application is configured to connect to PostgreSQL as a privileged role "
+    "({flags}). Use the least-privilege application role (PG_USER=onboardai_app). In Docker, start the stack "
+    "with the secrets file (docker compose --env-file <secrets file> ...). "
+)
+
+
+def privileged_override_allowed() -> bool:
+    """ALLOW_PRIVILEGED_DB_CONNECTION is honoured only for local development (never in production/Docker)."""
+    return settings.allow_privileged_db_connection and settings.app_env.strip().lower() == "development"
+
+
+def enforce_role_policy(app_is_superuser: bool, app_bypasses_rls: bool = False) -> list[str]:
+    """PostgreSQL role hygiene at startup. Returns the issues that only warrant a warning.
+
+    Fails closed: a superuser or BYPASSRLS application role is refused in every environment unless
+    ALLOW_PRIVILEGED_DB_CONNECTION=true is set explicitly with APP_ENV=development (local runs only).
+    """
     if settings.pg_reader_user.strip() and len(settings.pg_scope_secret) < employee_scope.MIN_SECRET_LENGTH:
         # Without the signing secret every employee-scoped read would fail closed: refuse to start.
         raise RuntimeError(f"PG_READER_USER is set but PG_SCOPE_SECRET is missing or shorter than "
                            f"{employee_scope.MIN_SECRET_LENGTH} characters. {LEAST_PRIVILEGE_HINT}")
     issues = []
-    if app_is_superuser:
-        issues.append("the application connects to PostgreSQL as a superuser")
+    flags = [name for name, on in (("superuser", app_is_superuser), ("BYPASSRLS", app_bypasses_rls)) if on]
+    if flags:
+        if not privileged_override_allowed():
+            raise RuntimeError(PRIVILEGED_CONNECTION.format(flags=", ".join(flags)) + LEAST_PRIVILEGE_HINT)
+        issues.append("the application connects to PostgreSQL as a superuser"
+                      if app_is_superuser else "the application role can bypass row-level security")
+        logger.warning("ALLOW_PRIVILEGED_DB_CONNECTION=true (development only): privileged database role allowed")
     if not settings.pg_reader_user.strip():
         issues.append("no dedicated read-only role (PG_READER_USER) is configured for SQL-agent queries")
     if issues and settings.app_env.strip().lower() == "production":
@@ -129,7 +150,8 @@ def init_db() -> None:
             _execute(con, "SELECT 1 FROM employees LIMIT 1", one=True)
             present = _execute(con, """SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name IN ('user_accounts', 'user_sessions')""", all_rows=True)
-            role = _execute(con, "SELECT rolsuper FROM pg_roles WHERE rolname = current_user", one=True)
+            role = _execute(con, "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
+                            one=True)
             integrity = _execute(con, """SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
                 AND table_name = 'escalations' AND column_name = 'employee_id'""", one=True)
         if len(present) != len(AUTH_TABLES):
@@ -142,7 +164,9 @@ def init_db() -> None:
                 "Data-integrity migration 007 has not been applied to PostgreSQL. Run: "
                 "python backend/migrations/007_data_integrity.py --apply (see docs/runbook.md section 11)."
             )
-        enforce_role_policy(app_is_superuser=bool(role and role["rolsuper"]))
+        if role is None:  # current_user always has a pg_roles row; anything else is treated as privileged
+            raise RuntimeError("Could not determine the PostgreSQL role attributes of the application connection.")
+        enforce_role_policy(app_is_superuser=bool(role["rolsuper"]), app_bypasses_rls=bool(role["rolbypassrls"]))
         return
     with _conn() as c:
         c.executescript("""

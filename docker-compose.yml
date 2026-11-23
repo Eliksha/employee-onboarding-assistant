@@ -51,6 +51,9 @@ services:
       TRUST_PROXY_HEADERS: "true"
       # API documentation (/docs, /redoc, /openapi.json) is not served by the containerised backend.
       API_DOCS: "false"
+      # Fail closed: the backend refuses to start as a superuser/BYPASSRLS role (for example the owner fallback
+      # above when the secrets file is not passed). Pinned here so .env cannot re-enable it in Docker.
+      ALLOW_PRIVILEGED_DB_CONNECTION: "false"
     volumes:
       - ./data/index:/app/data/index:ro   # existing FAISS index, never modified by the container
       - logs:/app/logs
