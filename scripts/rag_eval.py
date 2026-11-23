@@ -214,16 +214,17 @@ def eval_kb():
     rows.append(("A01", "Knowledge-base source files present",
                  PASS if any(d.endswith(".md") for d in docs) else FAIL, ", ".join(docs)))
 
-    idx_ok = (folder / ingest.INDEX_FILE).exists() and (folder / ingest.META_FILE).exists()
-    rows.append(("A02", "FAISS index + chunk metadata present on disk (no rebuild)",
-                 PASS if idx_ok else FAIL, f"{folder.relative_to(ROOT) if folder.is_relative_to(ROOT) else folder}"))
+    try:
+        version, index, stored, manifest = ingest.load_active(folder)
+        idx_ok = True
+    except ingest.IndexUnavailable as exc:
+        version, idx_ok, detail = "", False, str(exc)
+    rows.append(("A02", "Active FAISS index version present and valid (no rebuild)",
+                 PASS if idx_ok else FAIL, f"version {version}" if idx_ok else detail))
     if not idx_ok:
         return rows, info  # never build the index from the evaluator
 
-    import faiss
-    index = faiss.read_index(str(folder / ingest.INDEX_FILE))
-    stored = json.loads((folder / ingest.META_FILE).read_text(encoding="utf-8"))
-    info.update(ntotal=index.ntotal, dim=index.d, n_chunks=len(stored),
+    info.update(ntotal=index.ntotal, dim=index.d, n_chunks=len(stored), version=version,
                 by_source={s: sum(c["source"] == s for c in stored) for s in sorted({c["source"] for c in stored})})
     rows.append(("A03", "Index vector count equals chunk metadata count",
                  PASS if index.ntotal == len(stored) else FAIL,

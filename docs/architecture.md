@@ -110,6 +110,24 @@ flowchart TD
 
 Sources keep the existing `{file, section, score}` shape: records use `{"file": "Your records" or "Company records", "section": "Onboarding checklist" ..., "score": 1.0}`, handbook passages keep their file names. Only the policy clauses are sent to retrieval and the LLM; employee records are never sent to the LLM.
 
+## Data and knowledge ingestion (M4)
+
+```mermaid
+flowchart LR
+    csv["data/csv/*.csv"] -->|"scripts/import_csv.py<br/>validate all, dry run default,<br/>one transaction, no deletes"| imp["onboardai_importer<br/>(migration 006)"]
+    imp --> pg[("PostgreSQL<br/>reference tables")]
+    dict["schema_dictionary.json"] -. "checked against catalog" .- pg
+    pdf["handbook.pdf (canonical)"] --> chunk["page + heading aware chunks<br/>2-sentence windows"]
+    faq["faqs.md"] --> chunk
+    chunk --> emb["fastembed"] --> ver["data/index/versions/&lt;id&gt;<br/>validated build"]
+    ver -->|"atomic ACTIVE pointer"| ret["retriever<br/>(read-only, hot reload)"]
+```
+
+- **CSV import** (`backend/services/csv_import.py`, `scripts/import_csv.py`): six reference tables in foreign-key order; header/type/allowed-value/foreign-key/duplicate validation of every file before any write; idempotent upserts on natural keys; never deletes; `checklist_assignments` insert-only. Runs only as `onboardai_importer` (INSERT/UPDATE on reference tables, no access to auth, chat, ticket or signing-key data); the app and reader roles gain no privileges.
+- **Schema dictionary** (`backend/services/schema_dictionary.json`, `schema_dictionary.py`): tables, columns, PostgreSQL types, nullability, primary/unique/foreign keys, relationships and security flags; `introspect()` + `diff()` prove it matches the catalog (CI PostgreSQL job, `scripts/schema_dictionary.py --check`). It documents the approved query functions' data; it is not used to generate SQL.
+- **PDF RAG** (`backend/services/ingest.py`): the handbook PDF is the canonical source (same-stem Markdown is a derived copy and is skipped; identical files are indexed once). Text is extracted per page, split at numbered headings accepted only in sequence, and chunked per section and page. Retrieval units are overlapping 2-sentence windows whose `context` is the whole section ("small-to-big"): focused facts are retrievable, the LLM still sees full sections, and each section is returned once. Citations keep the section labels; sources gain an optional `page` field.
+- **Index lifecycle**: versioned builds, validation (counts, dimension, manifest, self-search), atomic activation through `ACTIVE`, previous version preserved on failure, three versions kept, legacy flat files still readable. The request path never builds or writes an index, so the read-only Docker mount is safe.
+
 ## Components
 
 | Component | Location | Responsibility |
@@ -117,8 +135,9 @@ Sources keep the existing `{file, section, score}` shape: records use `{"file": 
 | Frontend | `frontend/src/` | Login page, dashboard, AI Assistant, checklist, leave and payroll, assets, support tickets; CSRF token kept in memory |
 | API and middleware | `backend/main.py`, `backend/routes/`, `backend/middleware/` | Endpoints, validation, request IDs, logging, safe JSON errors |
 | Orchestrator | `backend/services/orchestrator.py`, `employee_query_router.py` | Deterministic clause routing with precedence rules; records via the closed allow-list, policy via RAG, mixed questions composed into one answer and one saved message |
-| Ingestion | `backend/services/ingest.py` | Section-aware chunking (350 words, 40 overlap), embedding, FAISS index |
-| Retrieval | `backend/services/retriever.py`, `embeddings.py` | Local embeddings, top-k search |
+| Ingestion | `backend/services/ingest.py` | Canonical PDF (page + heading aware) and FAQ chunking, 2-sentence retrieval windows, embedding, versioned FAISS index with atomic activation |
+| Retrieval | `backend/services/retriever.py`, `embeddings.py` | Local embeddings, top-k small-to-big search over the active index version (read-only, hot reload, last good version kept) |
+| CSV import and schema dictionary | `backend/services/csv_import.py`, `scripts/import_csv.py`, `backend/services/schema_dictionary.py` + `.json`, `backend/migrations/006_import_role.py` | Validated idempotent HR data import as `onboardai_importer`; machine-readable schema checked against the catalog |
 | Guardrails | `backend/services/guardrails.py` | Retrieval gate, context sanitising, output validation, cited-source mapping |
 | LLM client | `backend/services/llm.py` | OpenAI-compatible client (Groq temporarily), grounded system prompt |
 | Authentication | `backend/services/auth.py`, `auth_schema.py`, `backend/security.py`, `backend/routes/auth.py`, `backend/manage_accounts.py` | Argon2id passwords, server-side sessions, CSRF, login rate limiting, authorization dependencies, dev account provisioning |

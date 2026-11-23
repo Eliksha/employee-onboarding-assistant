@@ -16,15 +16,16 @@ from scripts import rag_eval as ev
 
 # ---------- A. Knowledge-base availability (reads the real index, read-only) ----------
 
-def test_committed_index_exists_and_matches_raw_documents():
-    faiss = pytest.importorskip("faiss")
-    folder = settings.index_dir
-    assert (settings.raw_dir / "handbook.md").exists() and (settings.raw_dir / "faqs.md").exists()
-    assert (folder / ingest.INDEX_FILE).exists(), "FAISS index missing - run: python -m backend.services.ingest"
-    index = faiss.read_index(str(folder / ingest.INDEX_FILE))
-    stored = json.loads((folder / ingest.META_FILE).read_text(encoding="utf-8"))
+def test_active_index_exists_and_matches_raw_documents():
+    pytest.importorskip("faiss")
+    assert (settings.raw_dir / "handbook.pdf").exists() and (settings.raw_dir / "faqs.md").exists()
+    try:
+        version, index, stored, manifest = ingest.load_active()
+    except ingest.IndexUnavailable as exc:
+        pytest.fail(f"FAISS index missing or invalid - run: python -m backend.services.ingest ({exc})")
     assert index.ntotal == len(stored) > 40
     assert [c["text"] for c in ingest.load_chunks()] == [c["text"] for c in stored], "index is stale"
+    assert manifest is not None and manifest["embed_model"] == settings.embed_model, "legacy index: rebuild it"
 
 
 # ---------- Test-data integrity: expectations come from the KB, not invented ----------

@@ -45,7 +45,8 @@ jobs:
       - name: Run the test suite
         run: >
           python -m pytest -q -rs -p no:cacheprovider --junitxml=junit-backend.xml
-          --ignore=tests/integration/test_postgres_roles.py
+          --ignore=tests/integration/test_postgres_roles.py --ignore=tests/integration/test_postgres_m4.py
+          --ignore=tests/integration/test_postgres_m5.py
       - name: Fail on unexpected skips
         run: |
           python - <<'PY'
@@ -59,7 +60,7 @@ jobs:
         run: python -m scripts.hybrid_eval --routing-only
 
   postgres-security-tests:
-    name: Live PostgreSQL role, RLS and isolation-attack tests
+    name: Live PostgreSQL roles, RLS, isolation attacks, import role, schema dictionary, migration 007
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -85,7 +86,8 @@ jobs:
           done
           sleep 2
           export ONBOARDAI_PG_TEST_ADMIN_DSN="postgresql://postgres:${PG_PW}@127.0.0.1:55439/postgres"
-          python -m pytest -q -rs -p no:cacheprovider --junitxml=junit-postgres.xml tests/integration/test_postgres_roles.py
+          python -m pytest -q -rs -p no:cacheprovider --junitxml=junit-postgres.xml \
+            tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py
           python - <<'PY'
           import sys, xml.etree.ElementTree as ET
           suite = ET.parse("junit-postgres.xml").getroot().find("testsuite")

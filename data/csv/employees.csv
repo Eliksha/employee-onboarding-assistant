@@ -1,0 +1,4 @@
+employee_id,name,email,department,joining_date,location
+EMP001,Aarav Sharma,aarav.sharma@example.com,Technology,2026-11-02,Pune
+EMP002,Meera Iyer,meera.iyer@example.com,Human Resources,2026-11-09,Bengaluru
+EMP003,Rohan Verma,rohan.verma@example.com,Finance,2026-11-16,Hyderabad

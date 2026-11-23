@@ -7,7 +7,7 @@
 **Mentor:** Shankhalika Sarkar  
 **Last updated:** 23 November 2026
 
-**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026). M3 (engineering baseline and automated evaluation) implemented and verified locally; GitHub Actions not yet run; awaiting owner review.
+**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026). M3 (engineering baseline and automated evaluation) committed. M4 (CSV import role, schema dictionary, canonical PDF RAG with versioned index, routing fixes) approved. M5 (feedback and escalation from chat, migration 007 data integrity, API docs restriction, nginx security headers) implemented and verified on disposable databases, a clone of the live database and isolated containers; M4 and M5 not activated, not committed; awaiting owner review.
 
 ## 1. Milestones
 
@@ -123,7 +123,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 
 ## 10. Next Immediate Step
 
-**Next:** Owner review and commit of M3 ("M3 - Engineering Baseline and Automated Evaluation", end of this file); push and confirm the first GitHub Actions run; then approval of M4 (data and document ingestion) and M5 (user workflow and data integrity). Azure milestones (A1 onward) remain ON HOLD.
+**Next:** Owner review and commit of M4 + M5; approval to activate them in order (backup, migration 007, host index rebuild, backend + frontend rebuild; optional migration 006 for CSV import) - see the M5 section at the end of this file. Azure milestones (A1 onward) remain ON HOLD.
 
 ### PostgreSQL Dependency Update — 20 November 2026
 
@@ -1400,3 +1400,134 @@ The in-process run reproduced every quality metric and the same five failing que
 2. `python -m scripts.hybrid_eval --routing-only` (expect 60/62).
 3. Optional: `WITH_EVAL=1 bash tests/load/run_isolated_load_test.sh loadtest-output` (about 4 minutes; uses Groq for the evaluation part; removes everything it creates).
 4. After pushing: open the repository's Actions tab and confirm all four jobs pass; only then record CI as green.
+
+
+---
+
+## M4 - Data Architecture Completion and Hybrid Answer Quality (23 November 2026)
+
+**Status: IMPLEMENTED AND VERIFIED IN ISOLATED ENVIRONMENTS; NOT ACTIVATED ON THE RUNNING STACK; NOT COMMITTED.** Built on commit `7e2e866`. The running Docker stack, live PostgreSQL data (messages/completed/tickets/accounts 8/7/0/1 before and after) and the production index `data/index` (legacy flat files, unchanged) were not modified. Activation needs owner approval (steps below). Azure remains **ON HOLD**; Groq remains the temporary LLM.
+
+### Part A - CSV ingestion, import role, schema dictionary
+
+| Component | Implementation |
+|---|---|
+| Import role | Migration 006 (`backend/migrations/006_import_role.py`; plan/verify in `db_roles.build_import_plan` / `verify_import_role`): `onboardai_importer`, LOGIN, no superuser/createrole/createdb/bypassrls/replication, connection limit 2, statement timeout 60 s. SELECT + INSERT + column-level UPDATE on employees, leave_balances, assets, payroll_calendar, checklist; SELECT + INSERT only on checklist_assignments; own RLS policy; no access to auth, chat, feedback, escalation, ticket tables or the signing-key schemas. Resets only its own grants; the app and reader roles are unchanged (verified) |
+| CSV import | `backend/services/csv_import.py` + `scripts/import_csv.py`: six files in FK order; exact headers, typed/allowed-value validation, duplicate keys and emails within a file, FKs against file set + database, email ownership; every file validated before any write; dry run by default; one transaction (any validation or database error -> nothing written); idempotent upserts on natural keys (insert / update changed columns / unchanged); never deletes ("not in file" counted only); assignments insert-only (progress preserved); identifiers validated against the schema dictionary and quoted, all values bound. CLI connects only as the import role (refuses superuser, BYPASSRLS, app and reader roles) |
+| Synthetic data | `data/csv/*.csv` generated from `docker/postgres/02_seed.sql`; importing them into a seeded database reports every row unchanged (SQLite and PostgreSQL) |
+| Schema dictionary | `backend/services/schema_dictionary.json` (12 tables: description, columns with PostgreSQL type/nullability/description, PK, unique, FKs with ON DELETE, personal-data/sensitive/RLS/reader/import flags; 7 relationships) + `schema_dictionary.py` (`load`, `relationships`, `introspect`, `diff`) + `scripts/schema_dictionary.py --check`. Validated against a disposable PostgreSQL catalog in the CI PostgreSQL job; consistency with `db_roles` and the import specs unit-tested. Security schemas deliberately not described |
+
+### Part B - Actual PDF RAG
+
+| Component | Implementation |
+|---|---|
+| Canonical source | `handbook.pdf`; same-stem `handbook.md` skipped as a derived copy; `faqs.md` indexed; byte-identical documents indexed once (manifest lists documents and skip reasons) |
+| Extraction and chunks | pypdf text per page; numbered headings accepted only in sequence (1., 2., 2.1 ...); one chunk per section and page with `page` metadata (section 6 heading on page 2, text on page 3 -> page 3); same section labels as before, so citations and the evaluation set are unchanged |
+| Retrieval quality | Small-to-big: overlapping 2-sentence windows are embedded; the retriever returns each parent section once with the full section text as context |
+| Index lifecycle | `versions/<id>/` (index, chunks, manifest) + atomic `ACTIVE` pointer; validation before activation (counts, dimension, manifest, self-search); failed builds remove their temp dir and keep the previous version; newest 3 versions kept; legacy flat files still load; the request path never builds or writes; the retriever hot-reloads a new ACTIVE version and keeps the last good version if a new one is broken; `POST /ingest` returns 409 on a read-only mount |
+| Citations / API | `Source.page` optional; `/chat` uses `response_model_exclude_none`, so records sources and older answers are unchanged (no `page: null`); history keeps pages; frontend shows "(p. N)" |
+| Docker | Verified: isolated backend container with the PDF index mounted `:ro` answered with page citations; an in-container rebuild was refused (OSError) and the active version stayed unchanged |
+
+### Part C - M3 evaluation failures (general fixes; held-out set unchanged, `git diff` empty)
+
+| Failure | Fix |
+|---|---|
+| M10 "sick days" | Leave vocabulary: `(casual/sick/earned/annual/paid/personal/privilege) day(s)` |
+| U04 "assigned to Meera" | Third-party patterns: "assigned/issued/allocated/given/belongs to <someone>" and capitalised names after for/of/to/does/did/has/is/about/with (domain-word allow-list) |
+| M01, M06 pronoun follow-ups | A follow-up clause with only a pronoun reference is sent to retrieval with the previous clause's topic words ("can i carry them forward (earned leaves)") |
+| H14 cab question | Small-to-big retrieval windows (no question-specific rules); retrieval comparison over 49 answerable cases: expected section in top 4 and gate passed 44 -> 47, out-of-scope/unknown gate behaviour unchanged (9/13 reach the LLM, which answers NOT_FOUND, as before) |
+
+### Evaluation - before (M3) / after (M4), same 62 held-out questions, HTTP end-to-end on PostgreSQL with least-privilege roles
+
+| Metric | M3 | M4 |
+|---|---|---|
+| Routing accuracy | 60/62 | **62/62** |
+| Records correct / unauthorized refused / leak markers | 25/26 / 7/8 / 0 | **26/26 / 8/8 / 0** |
+| Retrieval hit@4 / MRR | 27/30 / 0.861 | **30/30 / 0.978** |
+| Grounded / false fallbacks / citation hit / precision | 26/30 / 4 / 26/30 / 1.00 | **30/30 / 0 / 30/30 / 1.00** (all handbook citations from handbook.pdf with a page) |
+| Mixed fully correct / out-of-scope fallback | 7/10 / 6/6 | **10/10** / 6/6 |
+| Latency p50/p95 ms (records, handbook, mixed) | 152/238, 374/2,443, 478/804 | 160/188, 425/3,496, 443/2,452 |
+
+Answer-quality regressions: none (fixed H14, M01, M06, M10, U04). Latency: handbook/mixed p95 higher (n = 28/10; p95 is essentially the slowest single Groq call; p50 +51 / -35 ms) - observed, attributed to LLM response-time variance, not investigated further. In-process run: identical quality metrics. Load test (10 users, 60 s): 287 requests, 0 failures, median 83 ms / p95 200 ms (M3: 281, 0, 81 / 200).
+
+### Verification
+
+| Suite | Result |
+|---|---|
+| Backend, CI-equivalent clean Python 3.12 container (index built from the PDF) | **516 passed, 0 skipped** |
+| Backend, local Python 3.14 (scratch PDF index) | 516 passed (+105 PostgreSQL tests skipped locally, run below) |
+| PostgreSQL suites on a disposable server (77 role + 28 M4: import role grants and denials, app/reader gained no writes, dry run, apply, repeat, rollback on invalid data and on a database error, isolation after import, CLI refusals, schema dictionary vs catalog) | **105 passed, 0 skipped** |
+| Frontend test / lint / build | 9/9 / clean / built |
+| Held-out evaluation (HTTP + in-process) | see table above |
+| Isolated stack: read-only index, page citations, load test, secrets in logs | rebuild refused, unchanged; pages present; 0 failures; 0 secrets |
+
+New tests: `test_csv_import.py` (29), `test_schema_dictionary.py` (4), `test_pdf_index.py` (19), `test_postgres_m4.py` (28), plus page-citation tests in `test_hybrid_chat.py` and `format.test.js`. Changed tests: five chat tests use the new `indexed_env` fixture (the request path no longer builds an index); `test_rag_eval.py` checks the active index version.
+
+### Activation (owner approval required; nothing below has been run on the live stack)
+
+1. Backup (runbook section 9 pattern).
+2. Rebuild the index on the host: `python -m backend.services.ingest` (adds `data/index/versions/` + `ACTIVE`; the legacy flat files stay for rollback; the running pre-M4 backend ignores them).
+3. Rebuild and recreate only the backend: `docker compose --env-file <secrets file> up -d --build --no-deps backend`.
+4. Optional, for CSV import: add `ONBOARDAI_IMPORT_DB_PASSWORD` to the secrets file, run migration 006 (dry run, `--apply`, `--verify`; runbook section 10), then `scripts.import_csv` dry run before any `--apply`.
+5. Manual check: sign in, ask "Is a cab provided if I stay late at work?" (expect a `handbook.pdf` citation with "(p. 3)") and one mixed question.
+Rollback: delete `data/index/ACTIVE` (legacy index) and/or rebuild the backend from the previous commit; migration 006 rollback in runbook section 10.
+
+### Remaining gaps
+
+- Routing is rule-based: new phrasings and names written in lower case (for example "for meera") are not recognised as third parties (data still cannot leak: RLS scopes every read to the session employee).
+- Grounding checks remain lexical; the evaluation is one run on 62 questions.
+- Local development needs `python -m backend.services.ingest` once (the index format changed); until then `test_rag_eval.py::test_active_index_exists_and_matches_raw_documents` fails locally against the legacy index.
+- Dates are still stored as text; no FKs on messages/feedback; escalation attribution and the feedback/escalation UI remain for M5.
+- CSV import is a CLI (no upload UI, by MVP scope); scripts are not in the image (mounted or run on the host).
+
+
+---
+
+## M5 - User Workflow Completion and Data Integrity (23 November 2026)
+
+**Status: IMPLEMENTED AND VERIFIED (unit, integration, disposable PostgreSQL, clone of the live database, isolated containers); NOT ACTIVATED; NOT COMMITTED.** Baseline: the approved M4 working tree on commit `7e2e866`. Live PostgreSQL (messages/feedback/escalations/completed/accounts 8/0/0/7/1 before and after), the running containers and the active index were not changed. Azure remains **ON HOLD**.
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| Chat feedback and escalation | Every answer has Helpful / Not helpful (existing `POST /feedback`) and "Escalate to HR/IT" (existing `POST /escalate`, now with an optional `message_id`). Ownership checks as for feedback (403 other employee, 404 unknown); escalating the same answer twice returns the existing escalation; escalations record the session employee (`NULL` for admins). `GET /history` items gain optional `feedback` (latest rating) and `escalated` fields, so the UI shows state after reload. The fallback text now points to the button. Free-text escalations (`{question}` only) still work unchanged |
+| Migration 007 | `backend/services/db_integrity.py` + `backend/migrations/007_data_integrity.py` (dry run default, `--verify`, `--apply` in one transaction, owner only, idempotent): `escalations.employee_id` / `message_id`; FKs messages.employee_id -> employees, feedback.message_id -> messages (CASCADE), escalations.employee_id -> employees, escalations.message_id -> messages (SET NULL); feedback.message_id NOT NULL; CHECKs on feedback.rating, messages.found, escalations.status; 3 indexes. Refuses (no changes) while invalid rows exist; never deletes or rewrites data. Fresh installs: `docker/postgres/04_integrity.sql` (tested to match). SQLite gets the columns at startup |
+| Startup safety | The M5 backend refuses to start on PostgreSQL until migration 007 is applied (clear message) |
+| Schema dictionary | Updated to the M5 schema (11 relationships; escalations personal data); validated against both a fresh install and a migrated pre-M5 database |
+| API documentation | `/docs`, `/redoc`, `/openapi.json` only when `APP_ENV=development` or `API_DOCS=true`; `docker-compose.yml` sets `API_DOCS: "false"`; nginx returns 404 for `/api/docs|redoc|openapi.json` |
+| nginx security headers | CSP (`default-src 'self'`, scripts self only, styles self + Google Fonts + inline, fonts gstatic, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri`/`form-action` self), nosniff, X-Frame-Options DENY, Referrer-Policy no-referrer, Permissions-Policy, COOP same-origin, `server_tokens off`; on every response including `/api` |
+| Unchanged | Authentication, sessions, CSRF, employee isolation, RLS and signed scope, approved query functions, router/orchestrator/RAG, PDF index, `ChatResponse` contract (additive fields only) |
+
+### Verification
+
+| Check | Result |
+|---|---|
+| Backend suite, CI-equivalent clean Python 3.12 container (PDF index built fresh) | **545 passed, 0 skipped** (516 M4 + 27 new M5 tests + 2 new frontend-contract route cases) |
+| PostgreSQL suites on a disposable server (77 roles + 28 M4 + 20 M5) | **125 passed, 0 skipped** |
+| Frontend test / lint / build | 11/11 / clean / built |
+| Held-out routing | 62/62 (router unchanged) |
+| Clone of the live database (pg_dump, signing key excluded): deployed (M4) image before 007 | 5/5 (login, chat, feedback, free-text escalation, cross-employee 403) |
+| Clone: M5 image before 007 | refused to start with the migration-007 message |
+| Clone: migration 007 | verify exit 1 -> dry run (no constraints created) -> apply 13 statements, verified -> verify exit 0 -> re-run "nothing to do"; existing rows 9/1/1 with identical checksum; schema dictionary matches; 005 roles/RLS verify clean |
+| Clone: deployed (M4) image after 007 (backward compatibility) | 5/5 |
+| Clone: M5 backend (`API_DOCS=false`) + M5 frontend (nginx) | 19/19 - feedback, escalate own answer, idempotent, cross-employee 403, CSRF 403, history state, PDF page citation, security headers on pages and `/api`, docs 404 via nginx and directly, SPA assets same-origin; 0 tracebacks, 0 secrets in logs |
+
+New tests: `test_feedback_escalation.py` (10), `test_m5_hardening.py` (17), `test_postgres_m5.py` (20), 2 frontend tests. Changed tests: `test_frontend_contract.py` expects 15 frontend API calls (was 13: +feedback, +escalate); the PostgreSQL fixtures of `test_postgres_roles.py` and `test_postgres_m4.py` build the full fresh-install schema (01-04); `test_schema_dictionary.py` expects 11 relationships.
+
+### Activation (owner approval required; order matters)
+
+1. Backup (runbook section 9).
+2. Migration 007 (runbook section 11): `--verify` (exit 1), dry run, `--apply`, `--verify` (exit 0). Safe with the running M4 backend.
+3. If M4 is not active yet: rebuild the index on the host (`python -m backend.services.ingest`, M4 step).
+4. Rebuild and recreate backend and frontend: `docker compose --env-file <secrets file> up -d --build --no-deps backend frontend`.
+5. Manual check in the browser: rate an answer, escalate it (button changes to "Escalated to HR/IT", reload keeps the state), sign in as another employee and confirm the history is separate; `http://localhost:8080/api/docs` returns 404; DevTools shows no CSP violations (fonts load).
+
+**Rollback:** recreate backend/frontend from the M4 images (they work with 007 applied). Constraint removal only if required (runbook section 11); full return via the backup.
+
+### Remaining risks
+
+- The CSP keeps `style-src 'unsafe-inline'` (React style attributes) and allows Google Fonts; a self-hosted font would allow removing the external origins.
+- Escalations are stored, not delivered (no email/ticket integration); no reviewer UI for feedback or escalations.
+- Browser-level CSP behaviour was checked through headers and same-origin assets, not with a headless browser in this run; the manual step 5 covers it.
+- Dates are still stored as text; `messages`/`feedback` have no RLS (only the app role can read them; the reader cannot).

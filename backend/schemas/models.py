@@ -21,6 +21,7 @@ class Source(BaseModel):
     file: str
     section: str
     score: float
+    page: Optional[int] = None  # PDF page of a handbook passage (optional; omitted when not applicable)
 
 
 class ChatResponse(BaseModel):
@@ -50,6 +51,7 @@ class FeedbackRequest(BaseModel):
 class EscalateRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
     contact_pref: Optional[str] = Field(default=None, max_length=100)
+    message_id: Optional[int] = None  # optional: the chat answer being escalated (must be the caller's own)
 
 
 class StatusResponse(BaseModel):

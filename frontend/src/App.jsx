@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { LayoutDashboard, Bot, ClipboardCheck, CalendarDays, Laptop, Headset, Sparkles, Menu, X, Send, RefreshCw, ArrowRight, UserRound, ShieldCheck, LogOut, LoaderCircle } from 'lucide-react';
-import { authApi, employeeApi, setCsrfToken, setUnauthorizedHandler } from './api';
+import { LayoutDashboard, Bot, ClipboardCheck, CalendarDays, Laptop, Headset, Sparkles, Menu, X, Send, RefreshCw, ArrowRight, UserRound, ShieldCheck, LogOut, LoaderCircle, ThumbsUp, ThumbsDown, LifeBuoy } from 'lucide-react';
+import { authApi, employeeApi, feedbackApi, setCsrfToken, setUnauthorizedHandler } from './api';
 import { SESSION_EXPIRED_NOTICE, SIGNED_OUT_NOTICE } from './auth';
 import LoginPage from './LoginPage';
-import { CHAT_MAX_LENGTH, formatSources } from './format';
+import { CHAT_MAX_LENGTH, answerActions, escalationPayload, formatSources } from './format';
 import './App.css';
 
 const NAV = [
@@ -25,6 +25,33 @@ function DataTable({ data, empty = 'No records available.' }) {
   if (!records.length) return <p className="muted">{empty}</p>;
   const keys = [...new Set(records.flatMap((record) => Object.keys(record ?? {})))].filter((key) => !['employee_id'].includes(key));
   return <div className="table-scroll"><table><thead><tr>{keys.map((key) => <th key={key}>{pretty(key)}</th>)}</tr></thead><tbody>{records.map((record, index) => <tr key={record.id ?? index}>{keys.map((key) => <td key={key}>{display(record[key])}</td>)}</tr>)}</tbody></table></div>;
+}
+
+// Rate or escalate one answer through the existing /feedback and /escalate endpoints.
+function AnswerActions({ message }) {
+  const [local, setLocal] = useState({});
+  const [pending, setPending] = useState('');
+  const [note, setNote] = useState('');
+  const { rating, escalated } = answerActions(message, local);
+  if (message.id == null) return null;
+  const rate = async (value) => {
+    setPending(value); setNote('');
+    try { await feedbackApi.rate(message.id, value); setLocal((s) => ({ ...s, rating: value })); setNote('Thanks for the feedback.'); }
+    catch (err) { setNote(err.response?.data?.detail ?? 'Could not save feedback.'); }
+    finally { setPending(''); }
+  };
+  const escalate = async () => {
+    setPending('escalate'); setNote('');
+    try { const r = await feedbackApi.escalate(escalationPayload(message)); setLocal((s) => ({ ...s, escalated: true })); setNote(`Escalated to HR/IT (reference #${r.data?.id}).`); }
+    catch (err) { setNote(err.response?.data?.detail ?? 'Could not escalate this answer.'); }
+    finally { setPending(''); }
+  };
+  return <div className="answer-actions" aria-label="Answer feedback">
+    <button type="button" className={rating === 'up' ? 'selected' : ''} aria-pressed={rating === 'up'} aria-label="Helpful" title="Helpful" disabled={!!pending} onClick={() => rate('up')}><ThumbsUp size={14}/></button>
+    <button type="button" className={rating === 'down' ? 'selected' : ''} aria-pressed={rating === 'down'} aria-label="Not helpful" title="Not helpful" disabled={!!pending} onClick={() => rate('down')}><ThumbsDown size={14}/></button>
+    <button type="button" className="escalate" disabled={!!pending || escalated} onClick={escalate}><LifeBuoy size={14}/>{escalated ? 'Escalated to HR/IT' : 'Escalate to HR/IT'}</button>
+    {note && <span className="answer-note" role="status">{note}</span>}
+  </div>;
 }
 
 function Chat({ employeeId }) {
@@ -49,7 +76,7 @@ function Chat({ employeeId }) {
   };
   return <section className="panel chat-panel"><div className="panel-heading"><div><h2>Ask OnboardAI</h2><p>Answers from your handbook and employee records.</p></div><button className="subtle-button" onClick={load}><RefreshCw size={16}/> Refresh</button></div>
     <div className="chat-messages">{!history.length && <div className="empty-state"><Bot size={38}/><h3>How can I help you today?</h3><p>Try “What is my leave balance?” or “What is the leave policy?”</p></div>}
-    {history.map((message, index) => <div className="exchange" key={message.id ?? index}><div className="bubble question">{message.question}</div><div className="bubble answer"><div className="answer-label"><Sparkles size={15}/> OnboardAI</div><p>{message.answer}</p>{formatSources(message.sources) && <small>Sources: {formatSources(message.sources)}</small>}</div></div>)}</div>
+    {history.map((message, index) => <div className="exchange" key={message.id ?? index}><div className="bubble question">{message.question}</div><div className="bubble answer"><div className="answer-label"><Sparkles size={15}/> OnboardAI</div><p>{message.answer}</p>{formatSources(message.sources) && <small>Sources: {formatSources(message.sources)}</small>}<AnswerActions message={message}/></div></div>)}</div>
     {error && <p className="error" role="alert">{String(error)}</p>}
     <form className="chat-form" onSubmit={send}><input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask a question about onboarding..." aria-label="Chat question" maxLength={CHAT_MAX_LENGTH}/><button disabled={busy || !question.trim()} type="submit"><Send size={18}/>{busy ? 'Sending...' : 'Send'}</button></form>
     <p className="disclaimer">Demo only · Synthetic employee data · Responses may require HR verification.</p>

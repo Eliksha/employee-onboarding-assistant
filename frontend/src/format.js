@@ -12,7 +12,21 @@ export function formatSources(sources) {
   }
   if (!Array.isArray(list) || list.length === 0) return '';
   return list
-    .map((s) => (typeof s === 'string' ? s : [s?.file, s?.section].filter(Boolean).join(' › ')))
+    .map((s) => (typeof s === 'string' ? s
+      : [s?.file, s?.section].filter(Boolean).join(' › ') + (Number.isInteger(s?.page) ? ` (p. ${s.page})` : '')))
     .filter(Boolean)
     .join('; ');
+}
+
+// Feedback / escalation state of one chat answer: local actions (this session) override the stored history.
+export function answerActions(message, local = {}) {
+  return {
+    rating: local.rating ?? message?.feedback ?? null,
+    escalated: Boolean(local.escalated ?? message?.escalated),
+  };
+}
+
+// Body for POST /escalate from a chat answer (question limited to the backend's 500 characters).
+export function escalationPayload(message) {
+  return { question: String(message?.question ?? '').slice(0, CHAT_MAX_LENGTH), message_id: message?.id };
 }

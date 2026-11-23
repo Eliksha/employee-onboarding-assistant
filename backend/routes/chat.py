@@ -21,7 +21,7 @@ router = APIRouter()
 logger = logging.getLogger("app")
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, response_model_exclude_none=True)
 def chat(req: ChatRequest, user: AuthUser = Depends(csrf_protected)):
     """Answer handbook or employee-specific questions for the signed-in user."""
 

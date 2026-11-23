@@ -13,7 +13,7 @@ logger = logging.getLogger("app")
 FALLBACK = (
     "I could not find this in the NovaTech employee handbook, "
     "so I don't want to guess. "
-    "You can use the escalate option or contact HR at "
+    "You can use the Escalate to HR/IT button below this answer or contact HR at "
     "hr@novatech.example "
     "(IT questions: it-help@novatech.example)."
 )
@@ -58,7 +58,8 @@ def answer_policy(question: str) -> Dict:
 
     # Only passages actually cited in the answer are returned as sources.
     sources = [
-        {"file": h["source"], "section": h["section"], "score": round(h["score"], 3)}
+        {"file": h["source"], "section": h["section"], "score": round(h["score"], 3),
+         **({"page": h["page"]} if h.get("page") else {})}
         for h in cited
     ]
 

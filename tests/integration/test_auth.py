@@ -206,7 +206,8 @@ def test_cross_employee_writes_are_forbidden_and_change_nothing(emp1_client):
     assert employee_db.get_employee_tickets("EMP002") == before_tickets
 
 
-def test_feedback_only_on_own_messages(app_client, accounts, monkeypatch, env):
+def test_feedback_only_on_own_messages(app_client, accounts, monkeypatch, indexed_env):
+    env = indexed_env
     monkeypatch.setattr(env, "similarity_threshold", 0.0)
     monkeypatch.setattr(llm, "generate_answer", lambda q, p: "8 per year")
     with new_client() as other:

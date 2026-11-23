@@ -86,7 +86,8 @@ Re-running `set` with a new password resets the password and signs the account o
 
 ## 6. Data and index operations
 
-- **Rebuild the FAISS index** (only after changing `data/raw`): `python -m backend.services.ingest`. This overwrites `data/index`. `POST /ingest` does the same but requires an administrator session and CSRF token.
+- **Rebuild the FAISS index** (only after changing `data/raw`): `python -m backend.services.ingest` on the host. It builds a new validated version under `data/index/versions/` and activates it atomically; the previous version stays if anything fails (section 10). `POST /ingest` does the same but requires an administrator session and CSRF token, and returns 409 in Docker because the index is mounted read-only.
+- **Import HR reference data from CSV:** `python -m scripts.import_csv data/csv` (dry run) as the dedicated import role (section 10).
 - **Reset Docker data**: `docker compose down -v` removes the container database, accounts, sessions, chat history, tickets and logs. The local PostgreSQL and the FAISS index are not affected.
 - **Back up a local SQLite database** before experiments: `Copy-Item data\app.db data\app_backup_<date>.db`.
 
@@ -95,7 +96,7 @@ Re-running `set` with a new password resets the password and signs the account o
 | Command | Notes |
 |---|---|
 | `python -m pytest -q` | Always uses a temporary SQLite database and temporary log folder; PostgreSQL connections are blocked; test accounts get random passwords per run |
-| `python -m pytest -q tests/integration/test_postgres_roles.py` | Live role, permission and isolation-attack tests; skipped unless `ONBOARDAI_PG_TEST_ADMIN_DSN` points at a disposable PostgreSQL (see section 9) |
+| `python -m pytest -q tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py` | Live role, permission, isolation-attack, import-role, CSV-import, schema-dictionary and migration-007 tests; skipped unless `ONBOARDAI_PG_TEST_ADMIN_DSN` points at a disposable PostgreSQL (see section 9) |
 | `cd frontend; npm test; npm run build` | Frontend helper tests and production build |
 | `python -m scripts.rag_eval` | Live LLM evaluation; **rewrites `docs/rag_eval_report.md`**. Use `--no-llm` for deterministic checks only |
 
@@ -183,3 +184,70 @@ $env:ONBOARDAI_PG_TEST_ADMIN_DSN = "postgresql://postgres:<random>@127.0.0.1:554
 python -m pytest -q tests/integration/test_postgres_roles.py
 docker stop onboardai-roletest
 ```
+
+## 10. CSV import, schema dictionary and index versions (M4)
+
+### Import role (migration 006; changes the live database - get approval first)
+
+A dedicated login role `onboardai_importer` is used ONLY by the manual CSV import CLI, never by the running backend. It may SELECT/INSERT/UPDATE (listed columns only) the HR reference tables `employees`, `leave_balances`, `assets`, `payroll_calendar`, `checklist`, and only SELECT/INSERT `checklist_assignments` (an import never changes an employee's progress). No DELETE, TRUNCATE or DDL; no access to `user_accounts`, `user_sessions`, `messages`, `feedback`, `escalations`, `tickets` or the signing-key schemas. It has its own row-level-security policy; the app and reader roles are not changed. Requires migration 005.
+
+```powershell
+# 1. backup first (runbook section 9 pattern), then add ONBOARDAI_IMPORT_DB_PASSWORD (24+ random chars) to the secrets file
+$secrets = "C:\Users\Administrator\Desktop\employee-onboarding-assistant-day31\onboardai_secrets\phase1.env"
+docker compose --env-file $secrets run --rm --no-deps -e ONBOARDAI_IMPORT_DB_PASSWORD -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD=$env:DOCKER_PG_PASSWORD backend python backend/migrations/006_import_role.py            # dry run
+docker compose --env-file $secrets run --rm --no-deps -e ONBOARDAI_IMPORT_DB_PASSWORD -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD=$env:DOCKER_PG_PASSWORD backend python backend/migrations/006_import_role.py --apply
+docker compose --env-file $secrets run --rm --no-deps -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD=$env:DOCKER_PG_PASSWORD backend python backend/migrations/006_import_role.py --verify
+```
+
+Load the secrets file into the shell first (as in section 9) so `$env:DOCKER_PG_PASSWORD` and `ONBOARDAI_IMPORT_DB_PASSWORD` are set; values are never printed. Rollback: `DROP POLICY onboardai_importer_all ON <table>` for the four RLS tables, `REVOKE ALL ... FROM onboardai_importer`, `DROP ROLE onboardai_importer` (no data depends on it).
+
+### CSV import
+
+Files live in `data/csv/` (synthetic; identical to the seed). Format and rules: `backend/services/csv_import.py`. Dry run by default; `--apply` writes in ONE transaction and any invalid row aborts the whole import.
+
+```powershell
+docker compose --env-file $secrets run --rm --no-deps -v "${PWD}/data/csv:/app/data/csv:ro" -e ONBOARDAI_IMPORT_DB_USER=onboardai_importer -e ONBOARDAI_IMPORT_DB_PASSWORD backend python -m scripts.import_csv /app/data/csv            # dry run report
+docker compose --env-file $secrets run --rm --no-deps -v "${PWD}/data/csv:/app/data/csv:ro" -e ONBOARDAI_IMPORT_DB_USER=onboardai_importer -e ONBOARDAI_IMPORT_DB_PASSWORD backend python -m scripts.import_csv /app/data/csv --apply
+```
+
+(`scripts/` is not baked into the image; mount it too with `-v "${PWD}/scripts:/app/scripts:ro"`, or run the CLI on the host with the PG_* settings pointing at the database.) Re-running the same files reports everything "unchanged". Rows that exist in the database but not in a file are only counted, never deleted. The CLI refuses superusers, BYPASSRLS roles and the app/reader roles.
+
+### Schema dictionary
+
+`backend/services/schema_dictionary.json` documents every table in schema `public` (columns, types, keys, relationships, personal-data/RLS/reader/import flags). Check it against a database (read-only): `python -m scripts.schema_dictionary --check`. `tests/integration/test_postgres_m4.py` checks it against a disposable PostgreSQL in CI. After any schema change, update the JSON (the check lists every difference).
+
+### FAISS index versions (PDF canonical)
+
+`data/raw/handbook.pdf` is the canonical handbook; `handbook.md` is a derived copy and is not indexed; `faqs.md` is indexed separately. Each build creates `data/index/versions/<id>/` (index, chunks, manifest), validates it, and only then atomically replaces `data/index/ACTIVE`. A failed build leaves the previous version active; the three newest versions are kept. Without `ACTIVE`, the legacy flat files `data/index/faiss.index` + `chunks.json` are used.
+
+- **Rebuild (host only):** `python -m backend.services.ingest` (Docker mounts `data/index` read-only; an in-container rebuild or `POST /ingest` returns 409 and changes nothing).
+- **Activation:** a running M4 backend picks up the new `ACTIVE` version on the next question (no restart); if the new version cannot be loaded it keeps serving the previous one and logs a warning. A pre-M4 backend ignores `ACTIVE` and keeps reading the legacy flat files.
+- **Rollback:** write the previous version id into `ACTIVE` (`{"version": "<id>"}`), or delete `ACTIVE` to fall back to the legacy flat files.
+
+## 11. Data integrity, feedback and escalation, security headers (M5)
+
+### Migration 007 (changes the live database - get approval first)
+
+Adds `escalations.employee_id` and `escalations.message_id`; foreign keys `messages.employee_id -> employees`, `feedback.message_id -> messages` (ON DELETE CASCADE), `escalations.employee_id -> employees`, `escalations.message_id -> messages` (ON DELETE SET NULL); `feedback.message_id NOT NULL`; CHECK constraints on `feedback.rating` (up/down), `messages.found` (0/1) and `escalations.status` (open/in_progress/resolved/closed); three indexes. One transaction; refuses without changing anything if existing rows would violate a constraint (they are listed); never deletes or rewrites data. Fresh Docker databases get the same state from `docker/postgres/04_integrity.sql`.
+
+The migration is backward compatible with the M4 backend (new columns are nullable; the M4 code already satisfies every constraint), so it is applied FIRST. The M5 backend refuses to start on PostgreSQL until migration 007 is applied (clear startup error instead of failing requests).
+
+```powershell
+# load the secrets file into the shell first (section 9); take a backup (section 9)
+docker compose --env-file $secrets run --rm --no-deps -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD=$env:DOCKER_PG_PASSWORD backend python backend/migrations/007_data_integrity.py --verify   # exit 1 = not applied yet
+docker compose --env-file $secrets run --rm --no-deps -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD=$env:DOCKER_PG_PASSWORD backend python backend/migrations/007_data_integrity.py            # dry run
+docker compose --env-file $secrets run --rm --no-deps -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD=$env:DOCKER_PG_PASSWORD backend python backend/migrations/007_data_integrity.py --apply
+docker compose --env-file $secrets run --rm --no-deps -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD=$env:DOCKER_PG_PASSWORD backend python backend/migrations/007_data_integrity.py --verify   # exit 0
+```
+
+**Rollback:** first return the backend to the M4 image (it works with or without 007). Then, only if the constraints must go: `ALTER TABLE ... DROP CONSTRAINT` for the seven constraints listed above, `ALTER TABLE public.feedback ALTER COLUMN message_id DROP NOT NULL`, `DROP INDEX` for `idx_feedback_message_id`, `idx_escalations_employee_id`, `idx_escalations_message_id`. Dropping the two escalation columns deletes the attribution data and is not needed for the M4 backend; restore from the backup if a full return to the pre-M5 state is required.
+
+### Feedback and escalation in chat
+
+Every answer in the AI Assistant has Helpful / Not helpful buttons (`POST /feedback`) and "Escalate to HR/IT" (`POST /escalate` with the answer's `message_id`). Only the signed-in employee's own answers can be rated or escalated (403 otherwise; 404 for unknown messages); escalating the same answer twice returns the existing escalation. Escalations record the employee (`NULL` for administrator accounts). `GET /history` items carry two extra fields, `feedback` (latest rating or null) and `escalated` (bool). Escalations are simulated: they are stored for HR/IT and not sent anywhere.
+
+### API documentation and security headers
+
+- `/docs`, `/redoc` and `/openapi.json` are served only when `APP_ENV=development` (local runs), or when `API_DOCS=true` is set explicitly. `docker-compose.yml` sets `API_DOCS: "false"`; nginx additionally answers 404 for `/api/docs`, `/api/redoc` and `/api/openapi.json`.
+- nginx adds to every response (pages and `/api`): Content-Security-Policy (`default-src 'self'`, scripts from self only, styles from self + Google Fonts, fonts from fonts.gstatic.com, `frame-ancestors 'none'`, `object-src 'none'`), X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy no-referrer, Permissions-Policy (camera, microphone, geolocation, payment disabled), Cross-Origin-Opener-Policy same-origin; `server_tokens off`. Check: `curl -sI http://localhost:8080/ | findstr /i "content-security x-frame x-content referrer permissions"`.
+- If the page renders without styles after a change to fonts or external assets, the CSP is the first thing to check (browser console).

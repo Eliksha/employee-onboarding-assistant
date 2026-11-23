@@ -33,7 +33,7 @@ def backend_routes():
 
 
 def test_api_js_is_parsed():
-    assert len(frontend_calls()) == 13
+    assert len(frontend_calls()) == 15  # M5 added POST /feedback and POST /escalate from chat answers
 
 
 @pytest.mark.parametrize("call", frontend_calls(), ids=lambda c: f"{c[0]} {c[1]}")

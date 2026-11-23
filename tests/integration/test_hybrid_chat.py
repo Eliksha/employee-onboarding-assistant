@@ -137,3 +137,20 @@ def test_admin_gets_a_note_for_personal_records_and_the_policy_part(admin_client
     assert "available only to employee accounts" in body["answer"] and body["answer"].endswith(POLICY)
     assert [s["file"] for s in body["sources"]] == ["handbook.md"]
     assert body["message_id"] > 0 and _message_count() == before + 1
+
+
+# ---------------------------------------------------------------- M4: page-aware citations (optional field)
+PDF_HITS = [{"source": "handbook.pdf", "section": "2. Leave Policy > 2.1 Casual Leave", "page": 1,
+             "text": "2. Leave Policy > 2.1 Casual Leave: Employees get 8 casual leaves per calendar year.", "score": 0.9}]
+
+
+def test_pdf_citation_carries_the_page_and_records_sources_have_no_page_key(emp1_client, monkeypatch):
+    monkeypatch.setattr(retriever, "search", lambda q, k=None: [dict(h) for h in PDF_HITS])
+    monkeypatch.setattr(llm, "generate_answer", lambda q, p: POLICY)
+    body = emp1_client.post("/chat", json={"question": MIXED}).json()
+    assert set(body) == CONTRACT
+    records, handbook = body["sources"]
+    assert records == {"file": "Your records", "section": "Leave balances", "score": 1.0}   # no "page": null
+    assert handbook == {"file": "handbook.pdf", "section": "2. Leave Policy > 2.1 Casual Leave", "score": 0.9,
+                        "page": 1}
+    assert emp1_client.get("/history").json()[0]["sources"][1]["page"] == 1

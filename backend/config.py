@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
 
     # Authentication and sessions
     app_env: str = "development"            # "production" blocks the dev account-provisioning CLI
+    api_docs: Optional[bool] = None         # /docs, /redoc, /openapi.json; default: only when app_env=development
     session_cookie_name: str = "onboardai_session"
     session_cookie_secure: str = "auto"     # auto | true | false ("auto" = Secure when the request is HTTPS)
     session_ttl_minutes: int = 480          # absolute lifetime of a session

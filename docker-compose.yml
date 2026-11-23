@@ -49,6 +49,8 @@ services:
       # The backend sits behind nginx: use its X-Forwarded-For / -Proto for login rate limiting and
       # Secure cookies. SESSION_COOKIE_SECURE=auto sets Secure automatically once HTTPS terminates in front.
       TRUST_PROXY_HEADERS: "true"
+      # API documentation (/docs, /redoc, /openapi.json) is not served by the containerised backend.
+      API_DOCS: "false"
     volumes:
       - ./data/index:/app/data/index:ro   # existing FAISS index, never modified by the container
       - logs:/app/logs

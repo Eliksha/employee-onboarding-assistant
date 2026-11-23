@@ -34,12 +34,15 @@ Algorithm
    `needs_policy` if any clause needs the handbook. `policy_question` holds only the
    policy clauses, so handbook retrieval and the LLM never see the records part.
 4. Third-party references (another employee ID, "Meera's", "his/her/their", "my colleague's",
-   "everyone's") on a records clause mark the route `third_party`; the orchestrator then refuses
+   "everyone's", "assigned to <name>", or a capitalised name after for/of/to/does/has/is in the
+   original question) on a records clause mark the route `third_party`; the orchestrator then refuses
    the records part instead of showing the signed-in employee's own data under a misleading label.
+5. A follow-up clause that only refers back with a pronoun ("can I carry them forward") is sent to
+   retrieval together with the previous clause's topic words ("can i carry them forward (earned leaves)").
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from backend.services import employee_db
@@ -64,7 +67,8 @@ TOPICS = (
     ),
     Topic(
         "leave_balances",
-        (r"leaves?", r"pto", r"time off", r"days? off", r"vacation"),
+        (r"leaves?", r"pto", r"time off", r"days? off", r"vacation",
+         r"(?:casual|sick|earned|annual|paid|personal|privilege) days?"),
         (r"balances?", r"left", r"remaining", r"do i (?:still )?have(?! to)", r"have i (?:got|used|taken)",
          r"i(?:'ve| have)? (?:used|taken)", r"available to me"),
     ),
@@ -117,6 +121,9 @@ THIRD_PARTY = (
     r"(?:does|did) (?!(?:it|this|that|the|a|an|my|our|novatech|company|leave|policy|onboarding|checklist|everything|anything|all|sick|casual|earned|laptop)\b)[a-z]+ (?:still )?(?:have|get|use|take|complete|finish)",
     r"(?:has|is) (?!(?:it|this|that|the|a|an|my|our|there|novatech|company|leave|policy|onboarding|checklist|everything|anything|all|sick|casual|earned|laptop)\b)[a-z]+ (?:completed|finished|done|taken|used|got|been)",
     r"(?:colleague|teammate|coworker|co-worker|manager|friend|other person)(?:'s|s'?)?",
+    # "which laptop is assigned to meera", "assets issued to rohan"
+    r"(?:assigned|issued|allocated|given|belongs?|belonging) to (?!(?:me|myself|us|my|you|the|a|an|this|that|it|"
+    r"which|whom|employees|new|all|every|each)\b)[a-z]+",
     r"(?!(?:what|that|it|there|here|who|where|how|let|today|tomorrow|company|novatech|employee|year|month|week|day)'s)[a-z]+'s",
 )
 
@@ -129,6 +136,18 @@ _SPLIT_RE = re.compile(
 )
 
 _LEAVE_TYPES = ("casual", "sick", "earned", "annual", "maternity", "paternity", "bereavement")
+
+# A capitalised word after one of these words names a person ("checklist for Meera", "does Rohan have"),
+# unless it is a known domain word. Checked on the original-case question.
+_NAME_RE = re.compile(r"\b(?:for|of|to|does|did|has|is|about|with)\s+([A-Z][a-z]{2,})\b")
+_DOMAIN_WORDS = frozenset("""
+day week month year novatech novaconnect servicehub novavpn microsoft authenticator mfa vpn posh pto
+casual sick earned annual maternity paternity bereavement leave leaves laptop laptops onboarding checklist
+provident fund health insurance learning wellness payroll salary hr it monday tuesday wednesday thursday
+friday saturday sunday january february march april may june july august september october november december
+pune bengaluru hyderabad india handbook faq policy team company
+""".split())
+_ANAPHORA_RE = re.compile(r"\b(?:it|its|them|they|their|those|these|this|that|one|ones)\b")
 
 
 def _any(patterns, text: str) -> bool:
@@ -161,6 +180,7 @@ class ClauseRoute:
     intents: tuple = ()
     needs_policy: bool = False
     third_party: bool = False
+    query: str = ""               # text sent to retrieval when this clause needs the handbook
 
 
 @dataclass(frozen=True)
@@ -184,12 +204,29 @@ def clause_topics(clause: str) -> tuple:
     return tuple(t for t in TOPICS if _any(t.terms, clause))
 
 
-def classify_clause(clause: str, inherited: tuple = ()) -> ClauseRoute:
+def names_person(question: str) -> bool:
+    """True when the original-case question names someone ("for Meera", "does Rohan have")."""
+    return any(m.group(1).lower() not in _DOMAIN_WORDS for m in _NAME_RE.finditer(question or ""))
+
+
+def topic_phrase(clause: str, topics) -> str:
+    """Words that name the clause's topics, e.g. 'earned leaves' (leave-type modifiers kept)."""
+    words = []
+    for topic in topics:
+        for pattern in topic.terms:
+            m = re.search(rf"\b(?:(?:{'|'.join(_LEAVE_TYPES)})\s+)?(?:{pattern})(?![\w'])", clause)
+            if m:
+                words.append(m.group(0))
+                break
+    return " ".join(dict.fromkeys(words))
+
+
+def classify_clause(clause: str, inherited: tuple = (), named_person: bool = False) -> ClauseRoute:
     """Classify one clause; `inherited` topics apply when the clause names none ("how many do I have left")."""
     topics = list(clause_topics(clause) or inherited)
     policy = _any(POLICY_CUES, clause)
     personal = _any((PERSONAL,), clause)
-    third_party = _any(THIRD_PARTY, clause)
+    third_party = named_person or _any(THIRD_PARTY, clause)
 
     stated = tuple(t.intent for t in topics if _any(t.state_cues, clause))
     if stated:                                                     # P1
@@ -208,10 +245,17 @@ def route(question: str) -> Route:
     """Deterministically route a question (see module docstring for the precedence rules)."""
 
     text = normalise(question)
-    clauses_list, previous = [], ()
+    named = names_person(question)
+    clauses_list, previous, previous_phrase = [], (), ""
     for part in split_clauses(text):
-        clauses_list.append(classify_clause(part, previous))
-        previous = clause_topics(part) or previous
+        clause = classify_clause(part, previous, named)
+        own = clause_topics(part)
+        if not own and previous_phrase and _ANAPHORA_RE.search(part):
+            # "can I carry them forward" -> retrieval needs the topic the pronoun refers to.
+            clause = replace(clause, query=f"{part} ({previous_phrase})")
+        clauses_list.append(clause)
+        if own:
+            previous, previous_phrase = own, topic_phrase(part, own)
     clauses = tuple(clauses_list) or (ClauseRoute(text, "P5"),)
 
     intents: list[str] = []
@@ -222,7 +266,7 @@ def route(question: str) -> Route:
 
     resolved = [c for c in clauses if c.rule in ("P1", "P2", "P3")]
     if resolved:
-        policy_clauses = [c.text for c in clauses
+        policy_clauses = [c.query or c.text for c in clauses
                           if c.needs_policy or (c.rule in ("P4", "P5") and _is_question(c.text))]
         ambiguous = False
     else:

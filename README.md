@@ -27,6 +27,7 @@ Detailed progress, decisions and test evidence: [docs/project_plan.md](docs/proj
 - **Employee-specific answers** - questions such as "What is my leave balance?" are routed to approved database queries (no LLM involved).
 - **Secure sign-in** - email and password; each employee sees only their own data; sign out from any page.
 - **Chat history** per employee.
+- **Feedback and escalation from chat** - rate any answer (Helpful / Not helpful) or escalate it to HR/IT in one click; the escalation records who escalated which answer (M5).
 - **Onboarding checklist** - 15 tasks per employee; completion is saved.
 - **Leave & Payroll** - leave balances and the payroll calendar.
 - **My Assets** - assigned IT equipment.
@@ -70,10 +71,11 @@ More detail, including the RAG decision flow: [docs/architecture.md](docs/archit
 ```
 backend/            FastAPI app: routes/, services/ (rag, guardrails, retriever, llm, orchestrator, db), middleware/, migrations/ (SQLite)
 frontend/           React + Vite app, Dockerfile, nginx.conf
-data/raw/           Synthetic handbook, FAQs, checklist (knowledge base)
-data/index/         FAISS index (generated, git-ignored)
+data/raw/           Synthetic handbook (PDF canonical, Markdown copy), FAQs, checklist (knowledge base)
+data/csv/           Synthetic HR reference data for the CSV importer (matches the seed)
+data/index/         Versioned FAISS index: versions/<id>/ + ACTIVE pointer (generated, git-ignored)
 docker/postgres/    PostgreSQL schema and synthetic seed used by Docker
-scripts/            rag_eval.py (RAG evaluation), hybrid_eval.py (held-out hybrid evaluation), run_test_questions.py
+scripts/            rag_eval.py, hybrid_eval.py (evaluation), import_csv.py (CSV import), schema_dictionary.py (schema check), run_test_questions.py
 tests/              unit/ and integration/ pytest suites, eval/ (held-out dataset), load/ (locust load test)
 .github/workflows/  ci.yml (tests, security suite, frontend, Docker build; no deployment)
 docs/               Project plan, architecture, RAG evaluation report, test material
@@ -274,11 +276,12 @@ Install the pinned development tools first: `pip install -r requirements-dev.txt
 
 | Command | What it covers | Latest verified result |
 |---|---|---|
-| `python -m pytest -q` | Unit and integration tests (routing, orchestration, RAG, guardrails, auth, isolation, API, error handling, logging, frontend contract, Docker config, evaluation dataset). Always uses a temporary SQLite database; PostgreSQL connections are blocked. The real-embedding retrieval tests need the FAISS index (`python -m backend.services.ingest`). | **463 passed, 0 skipped** (23 Nov 2026, Python 3.12 in a clean container, CI-equivalent) |
-| `ONBOARDAI_PG_TEST_ADMIN_DSN=... python -m pytest tests/integration/test_postgres_roles.py` | Live PostgreSQL roles, RLS, signed scope and isolation attacks against a **disposable** local server (see the file header) | **77 passed** (23 Nov 2026) |
-| `cd frontend; npm test` / `npm run lint` / `npm run build` | Frontend helper tests, ESLint, production build | **8 passed** / 0 problems / built |
-| `python -m scripts.hybrid_eval --routing-only` | Held-out routing accuracy (62 questions, deterministic; also a CI regression floor) | **60/62 (96.8%)** |
-| `python -m scripts.hybrid_eval --report docs/hybrid_eval_report.md` | Held-out end-to-end evaluation: routing, records correctness, refusals, retrieval, grounding, citations, mixed answers, fallbacks, latency by route kind (isolated SQLite copy; Groq for handbook answers) | See [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md) |
+| `python -m pytest -q` | Unit and integration tests (routing, orchestration, RAG, guardrails, auth, isolation, API, error handling, logging, frontend contract, Docker config, evaluation dataset, CSV import, PDF index, feedback/escalation, security headers). Always uses a temporary SQLite database; PostgreSQL connections are blocked. The real-embedding retrieval tests need the FAISS index (`python -m backend.services.ingest`). | **545 passed, 0 skipped** (M5, 23 Nov 2026, Python 3.12 in a clean container, CI-equivalent) |
+| `ONBOARDAI_PG_TEST_ADMIN_DSN=... python -m pytest tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py` | Live PostgreSQL roles, RLS, signed scope, isolation attacks, import role, CSV import, schema dictionary and migration 007 against a **disposable** local server | **125 passed** (M5) |
+| `cd frontend; npm test` / `npm run lint` / `npm run build` | Frontend helper tests, ESLint, production build | **11 passed** / 0 problems / built (M5) |
+| `python -m scripts.hybrid_eval --routing-only` | Held-out routing accuracy (62 questions, deterministic; also a CI regression floor) | **62/62** (M4; 60/62 in M3) |
+| `python -m scripts.hybrid_eval --report docs/hybrid_eval_report.md` | Held-out end-to-end evaluation: routing, records correctness, refusals, retrieval, grounding, citations, mixed answers, fallbacks, latency by route kind (isolated SQLite copy; Groq for handbook answers) | M4: every quality metric 62/62 or 30/30 (before/after in [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md)) |
+| `python -m scripts.import_csv data/csv` / `python -m scripts.schema_dictionary --check` | CSV import dry run (see runbook section 10) / schema dictionary vs a database | - |
 | `bash tests/load/run_isolated_load_test.sh` | Small load test (locust) against a throw-away stack with least-privilege roles; `WITH_EVAL=1` also runs the HTTP evaluation | See [docs/load_test_report.md](docs/load_test_report.md) |
 | `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs `GROQ_API_KEY`, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (20 Nov 2026, live Groq; before Phases 1-2) |
 
@@ -312,8 +315,10 @@ Groq is used temporarily because Azure access is not yet available. The planned 
 - PostgreSQL schema is provided as a snapshot (`docker/postgres/`); migrations in `backend/migrations/` target SQLite only.
 - Direct dependencies are pinned (`requirements.txt`, `requirements-dev.txt`); transitive dependencies are not locked. No HTTPS.
 - The load test is a small smoke-level run (10 users, 60 s, records questions only); see [docs/load_test_report.md](docs/load_test_report.md).
-- Held-out evaluation findings (not yet fixed): "sick days" is not recognised as leave vocabulary; "assigned to <name>" is not detected as a third-party request; follow-up clauses that only use a pronoun ("apply for it") are sent to retrieval without their topic, so the handbook part can fall back. See [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md).
-- API docs (`/docs`, `/openapi.json`) are publicly reachable; nginx sends no security headers.
+- The five M3 held-out evaluation failures were fixed in M4 (see [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md)); the router remains rule-based, so unusual phrasings can still fall back to the handbook.
+- CSV import is a manual CLI (no upload UI); dates are still stored as text; the import role must be provisioned (migration 006) before importing into PostgreSQL.
+- API documentation is served only in development (`APP_ENV=development`; `API_DOCS=false` in Docker) and nginx blocks `/api/docs`; nginx sends CSP and related security headers (M5). The CSP allows Google Fonts and inline styles (`style-src 'unsafe-inline'`, needed by React style attributes).
+- Escalations are simulated (stored for HR/IT, not delivered by email or ticketing); feedback has no reviewer UI.
 
 ## Documentation
 

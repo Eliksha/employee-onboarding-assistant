@@ -465,3 +465,158 @@ def _verify_scope(conn, app_role, reader_role, scope_secret, scope, problems) ->
         scope[f"{role}_can_execute_verifier"] = ok
         if ok != expected:
             problems.append(f"{role} EXECUTE on the scope verifier is {ok}, expected {expected}")
+
+
+# ---------------------------------------------------------------- IMPORT role (migration 006)
+# Used only by the manual CSV import CLI (scripts/import_csv.py), never by the running application.
+# Reference/HR master data only: no auth tables, chat history, feedback, escalations or tickets, no DELETE,
+# no TRUNCATE, no DDL. checklist_assignments is INSERT-only so an import can never overwrite an
+# employee's own onboarding progress (`done`).
+IMPORT_ROLE = "onboardai_importer"
+IMPORT_PRIVILEGES: Dict[str, Tuple[Tuple[str, Optional[Tuple[str, ...]]], ...]] = {
+    "employees": (("SELECT", None), ("INSERT", None),
+                  ("UPDATE", ("name", "email", "department", "joining_date", "location"))),
+    "leave_balances": (("SELECT", None), ("INSERT", None), ("UPDATE", ("available_days",))),
+    "assets": (("SELECT", None), ("INSERT", None), ("UPDATE", ("employee_id", "asset_type", "asset_name", "status"))),
+    "payroll_calendar": (("SELECT", None), ("INSERT", None), ("UPDATE", ("payment_date", "status"))),
+    "checklist": (("SELECT", None), ("INSERT", None), ("UPDATE", ("phase", "task"))),
+    "checklist_assignments": (("SELECT", None), ("INSERT", None)),
+}
+IMPORT_IDENTITY_COLUMNS: Dict[str, str] = {"leave_balances": "id", "payroll_calendar": "id"}
+IMPORT_ROLE_SETTINGS = {"statement_timeout": "60s", "idle_in_transaction_session_timeout": "60s"}
+IMPORT_CONNECTION_LIMIT = 2
+_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
+
+
+def _schema_exists(conn, name: str) -> bool:
+    return bool(_value(_one(conn, "SELECT to_regnamespace(%s) IS NOT NULL AS ok", (name,)), "ok", 0))
+
+
+def _all(conn, query, params=()):
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        return cur.fetchall()
+
+
+def _has_table(conn, role: str, table: str, privilege: str) -> bool:
+    return bool(_value(_one(conn, "SELECT has_table_privilege(%s, %s, %s) AS ok",
+                            (role, f"public.{table}", privilege)), "ok", 0))
+
+
+def build_import_plan(conn, *, import_role: str = IMPORT_ROLE, password: Optional[str] = None,
+                      reset_password: bool = False, app_role: str = APP_ROLE,
+                      reader_role: str = READER_ROLE) -> Plan:
+    """Idempotent plan for the CSV import role. Touches only that role's grants and policies."""
+    if not ROLE_NAME_RE.match(import_role or "") or import_role in (app_role, reader_role):
+        raise ProvisioningError(f"Invalid import role name: {import_role!r}")
+    info = preflight(conn, app_role, reader_role)
+    database, owners = info["database"], info["table_owners"]
+    if info["current_user"] == import_role:
+        raise ProvisioningError("Run provisioning as the database owner/administrator, not as the import role")
+    existing = _role(conn, import_role)
+    if existing is not None and (_value(existing, "rolsuper", 1) or import_role in owners.values()):
+        raise ProvisioningError(f"Role {import_role} already exists and is a superuser or owns application tables")
+
+    plan = Plan()
+    attributes = sql.SQL(ROLE_ATTRIBUTES + " CONNECTION LIMIT {}").format(sql.Literal(IMPORT_CONNECTION_LIMIT))
+    if existing is None:
+        if not password or len(password) < MIN_PASSWORD_LENGTH:
+            raise ProvisioningError(f"A password of at least {MIN_PASSWORD_LENGTH} characters is required to "
+                                    f"create role {import_role}")
+        plan.add(f"create login role {import_role}",
+                 sql.SQL("CREATE ROLE {} WITH {} PASSWORD %s").format(_ident(import_role), attributes),
+                 (encrypt_password(password, import_role, scope=conn),), secret=True)
+    else:
+        plan.add(f"enforce least-privilege attributes on existing role {import_role}",
+                 sql.SQL("ALTER ROLE {} WITH {}").format(_ident(import_role), attributes))
+        if reset_password:
+            if not password or len(password) < MIN_PASSWORD_LENGTH:
+                raise ProvisioningError(f"--reset-password needs a password of at least {MIN_PASSWORD_LENGTH} "
+                                        "characters")
+            plan.add(f"set new password for {import_role}",
+                     sql.SQL("ALTER ROLE {} WITH PASSWORD %s").format(_ident(import_role)),
+                     (encrypt_password(password, import_role, scope=conn),), secret=True)
+        elif password:
+            plan.notes.append(f"Role {import_role} already exists: its password was NOT changed "
+                              "(use --reset-password to rotate it).")
+
+    for name, value in IMPORT_ROLE_SETTINGS.items():
+        plan.add(f"{import_role}: {name} = {value} (this database only)",
+                 sql.SQL("ALTER ROLE {} IN DATABASE {} SET {} = {}").format(
+                     _ident(import_role), _ident(database), sql.Identifier(name), sql.Literal(value)))
+    plan.add("connect to the database", sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+        _ident(database), _ident(import_role)))
+    plan.add("schema usage", sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(_ident(import_role)))
+    for schema in (PRIVATE_SCHEMA, RLS_SCHEMA):
+        if _schema_exists(conn, schema):
+            plan.add(f"no access to schema {schema}",
+                     sql.SQL("REVOKE ALL ON SCHEMA {} FROM {}").format(_ident(schema), _ident(import_role)))
+    plan.add("reset table privileges of the import role (clean, repeatable state)",
+             sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {}").format(_ident(import_role)))
+    plan.add("reset sequence privileges of the import role",
+             sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {}").format(_ident(import_role)))
+    for table, privileges in IMPORT_PRIVILEGES.items():
+        for privilege, columns in privileges:
+            target = (sql.SQL("{} ({})").format(sql.SQL(privilege), sql.SQL(", ").join(map(_ident, columns)))
+                      if columns else sql.SQL(privilege))
+            plan.add(f"{import_role}: {privilege}{'(' + ', '.join(columns) + ')' if columns else ''} on {table}",
+                     sql.SQL("GRANT {} ON {} TO {}").format(target, _table(table), _ident(import_role)))
+    for table, column in IMPORT_IDENTITY_COLUMNS.items():
+        seq_name = _value(_one(conn, "SELECT pg_get_serial_sequence(%s, %s) AS seq", (f"public.{table}", column)),
+                          "seq", 0)
+        if seq_name:
+            plan.add(f"{import_role}: identity sequence for {table}.{column}",
+                     sql.SQL("GRANT USAGE ON SEQUENCE {} TO {}").format(sql.SQL(seq_name), _ident(import_role)))
+    for table in RLS_TABLES:
+        if table in IMPORT_PRIVILEGES and not _policy_exists(conn, table, f"{import_role}_all"):
+            plan.add(f"policy {import_role}_all on {table} (import role reads and writes reference rows)",
+                     sql.SQL("CREATE POLICY {} ON {} AS PERMISSIVE FOR ALL TO {} USING (true) WITH CHECK (true)")
+                     .format(_ident(f"{import_role}_all"), _table(table), _ident(import_role)))
+    return plan
+
+
+def verify_import_role(conn, import_role: str = IMPORT_ROLE, app_role: str = APP_ROLE,
+                       reader_role: str = READER_ROLE) -> Dict[str, object]:
+    """Read-only report: import role attributes and effective privileges; app/reader gain no writes."""
+    report: Dict[str, object] = {"role": None, "privileges": {}, "problems": []}
+    problems: List[str] = report["problems"]  # type: ignore[assignment]
+    row = _role(conn, import_role)
+    if row is None:
+        problems.append(f"role {import_role} does not exist")
+        return report
+    attrs = dict(row) if isinstance(row, dict) else dict(zip(
+        ("rolname", "rolsuper", "rolcreaterole", "rolcreatedb", "rolbypassrls", "rolcanlogin",
+         "rolinherit", "rolreplication", "rolconnlimit"), row))
+    report["role"] = attrs
+    for flag in ("rolsuper", "rolcreaterole", "rolcreatedb", "rolbypassrls", "rolreplication"):
+        if attrs[flag]:
+            problems.append(f"{import_role} has {flag}")
+    for table in sorted(set(APP_PRIVILEGES) | set(READER_TABLES)):
+        privs = [p for p in _PRIVILEGES if _has_table(conn, import_role, table, p)]
+        columns = [_value(r, "attname", 0) for r in _all(conn, """SELECT attname FROM pg_attribute
+            WHERE attrelid = %s::regclass AND attnum > 0 AND NOT attisdropped""", (f"public.{table}",))]
+        updatable = sorted(c for c in columns if _value(_one(
+            conn, "SELECT has_column_privilege(%s, %s, %s, 'UPDATE') AS ok", (import_role, f"public.{table}", c)), "ok", 0))
+        if updatable and "UPDATE" not in privs:
+            privs.append("UPDATE")  # column-level UPDATE grant
+        privs = [p for p in _PRIVILEGES if p in privs]
+        report["privileges"][table] = privs
+        granted = dict(IMPORT_PRIVILEGES.get(table, ()))
+        expected = [p for p in _PRIVILEGES if p in granted]
+        if privs != expected:
+            problems.append(f"{import_role} on {table}: expected {expected}, has {privs}")
+        if updatable != sorted(granted.get("UPDATE") or ()):
+            problems.append(f"{import_role} UPDATE columns on {table}: expected "
+                            f"{sorted(granted.get('UPDATE') or ())}, has {updatable}")
+    for table in IMPORT_PRIVILEGES:
+        app_allowed = {priv for priv, _ in APP_PRIVILEGES.get(table, ())}
+        for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+            if _has_table(conn, reader_role, table, privilege):
+                problems.append(f"{reader_role} must not have {privilege} on {table}")
+            if privilege not in app_allowed and _has_table(conn, app_role, table, privilege):
+                problems.append(f"{app_role} must not have {privilege} on {table}")
+    for schema in (PRIVATE_SCHEMA, RLS_SCHEMA):
+        if _schema_exists(conn, schema) and _value(_one(
+                conn, "SELECT has_schema_privilege(%s, %s, 'USAGE') AS ok", (import_role, schema)), "ok", 0):
+            problems.append(f"{import_role} can use schema {schema}")
+    return report

@@ -62,8 +62,8 @@ def pg():
     try:
         loader = REAL_CONNECT(ADMIN_DSN, dbname=info["dbname"])
         with loader, loader.cursor() as cur:
-            for name in ("01_schema.sql", "02_seed.sql", "03_auth_schema.sql"):
-                cur.execute(Path(SQL_DIR / name).read_text(encoding="utf-8"))
+            for path in sorted(Path(SQL_DIR).glob("*.sql")):   # the full fresh-install schema (01-04)
+                cur.execute(path.read_text(encoding="utf-8"))
         loader.close()
 
         # Provision twice: the second run must be a clean no-op-equivalent (idempotent).

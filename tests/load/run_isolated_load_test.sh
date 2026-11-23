@@ -12,7 +12,8 @@
 # Usage (repository root, Git Bash or Linux; Docker and the dev requirements installed):
 #   bash tests/load/run_isolated_load_test.sh [output-dir]          # load test only
 #   WITH_EVAL=1 bash tests/load/run_isolated_load_test.sh            # + HTTP evaluation (uses .env Groq key)
-# Tunables: USERS (10), SPAWN_RATE (2), DURATION (60s), PORT (8301), PY (python interpreter)
+# Tunables: USERS (10), SPAWN_RATE (2), DURATION (60s), PORT (8301), PY (python interpreter),
+#           INDEX_SRC (FAISS index folder mounted read-only; default data/index)
 set -euo pipefail
 
 OUT=${1:-loadtest-output}
@@ -22,6 +23,7 @@ if [ -z "${PY:-}" ]; then
     if [ -x "$c" ] || command -v "$c" >/dev/null 2>&1; then PY=$c; break; fi
   done
 fi
+INDEX_SRC=${INDEX_SRC:-data/index}
 ID=onboardai-m3-$$; NET=$ID-net; DB=$ID-db; API=$ID-api; IMG=onboardai-backend:m3-isolated
 HOSTPWD=$(pwd -W 2>/dev/null || pwd)
 gen() { "$PY" -c "import secrets;print(secrets.token_urlsafe(24))"; }
@@ -61,13 +63,22 @@ echo "== backend as onboardai_app + onboardai_reader on 127.0.0.1:$PORT"
 ENVFILE=(); [ "${WITH_EVAL:-0}" = 1 ] && [ -f .env ] && ENVFILE=(--env-file .env)
 docker run -d --name "$API" "${ENVFILE[@]}" "${COMMON[@]}" -e PG_USER=onboardai_app -e PG_PASSWORD="$APP_PW" \
   -e PG_READER_USER=onboardai_reader -e PG_READER_PASSWORD="$READER_PW" -e PG_SCOPE_SECRET="$SCOPE" \
-  -v "$HOSTPWD/data/index:/app/data/index:ro" -p "127.0.0.1:$PORT:8000" "$IMG" >/dev/null
+  -v "$(cd "$INDEX_SRC" && (pwd -W 2>/dev/null || pwd)):/app/data/index:ro" -p "127.0.0.1:$PORT:8000" "$IMG" >/dev/null
 for i in $(seq 1 90); do curl -fs "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break; sleep 1; done
 echo "   healthy after ${i}s"
+echo "== read-only index mount: an in-container rebuild must fail and leave the active version unchanged"
+docker exec "$API" python -c "
+from backend.services import ingest
+before = ingest.active_version()
+try:
+    ingest.build_index(); print('   UNEXPECTED: rebuild succeeded on a read-only mount')
+except OSError as exc:
+    print('   rebuild refused:', type(exc).__name__, '- active version unchanged:', ingest.active_version() == before, '(' + before + ')')
+"
 
 if [ "${WITH_EVAL:-0}" = 1 ]; then
   echo "== HTTP evaluation (held-out set) against the isolated backend"
-  "$PY" -m scripts.hybrid_eval --base-url "http://127.0.0.1:$PORT" --email "$LOADTEST_EMAIL" \
+  INDEX_DIR="$INDEX_SRC" "$PY" -m scripts.hybrid_eval --base-url "http://127.0.0.1:$PORT" --email "$LOADTEST_EMAIL" \
     --password-env LOADTEST_PASSWORD --report "$OUT/hybrid_eval_http.md" --json "$OUT/hybrid_eval_http.json" --delay 1.5 \
     | sed -n '/## Summary/,/## Routing by/p'
 fi

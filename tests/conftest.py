@@ -161,6 +161,16 @@ def admin_client(app_client, accounts):
 
 
 @pytest.fixture
+def indexed_env(env):
+    """`env` plus a built FAISS index (the request path never builds one; see backend/services/retriever.py)."""
+    from backend.services import ingest
+
+    ingest.build_index()
+    retriever.reset()
+    return env
+
+
+@pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "db_path", tmp_path / "test.db")
     monkeypatch.setattr(settings, "index_dir", tmp_path / "index")

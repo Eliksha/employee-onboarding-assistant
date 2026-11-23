@@ -16,7 +16,19 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Employee Onboarding Assistant", lifespan=lifespan)
+def docs_enabled() -> bool:
+    """API documentation is served only in development (or when API_DOCS explicitly enables it)."""
+    from backend.config import settings
+
+    if settings.api_docs is not None:
+        return settings.api_docs
+    return settings.app_env.strip().lower() == "development"
+
+
+_DOCS = docs_enabled()
+app = FastAPI(title="Employee Onboarding Assistant", lifespan=lifespan,
+              docs_url="/docs" if _DOCS else None, redoc_url="/redoc" if _DOCS else None,
+              openapi_url="/openapi.json" if _DOCS else None)
 middleware.install(app)
 
 app.include_router(auth.router)

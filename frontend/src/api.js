@@ -80,4 +80,13 @@ export const employeeApi = {
     api.get('/history', { params: { employee_id: id } }),
 };
 
+// Answer feedback and HR/IT escalation (existing backend endpoints; CSRF header added by the interceptor).
+export const feedbackApi = {
+  rate: (messageId, rating) =>
+    api.post('/feedback', { message_id: messageId, rating }),
+
+  escalate: (payload) =>
+    api.post('/escalate', payload),
+};
+
 export default api;

@@ -1,0 +1,7 @@
+employee_id,leave_type,available_days
+EMP001,Casual Leave,8
+EMP001,Sick Leave,6
+EMP002,Casual Leave,10
+EMP002,Sick Leave,5
+EMP003,Casual Leave,7
+EMP003,Sick Leave,6

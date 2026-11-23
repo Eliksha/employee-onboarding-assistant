@@ -130,10 +130,17 @@ def init_db() -> None:
             present = _execute(con, """SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name IN ('user_accounts', 'user_sessions')""", all_rows=True)
             role = _execute(con, "SELECT rolsuper FROM pg_roles WHERE rolname = current_user", one=True)
+            integrity = _execute(con, """SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
+                AND table_name = 'escalations' AND column_name = 'employee_id'""", one=True)
         if len(present) != len(AUTH_TABLES):
             raise RuntimeError(
                 "Authentication tables are missing in PostgreSQL. Run: python backend/migrations/004_auth_tables.py "
                 "(with PYTHONPATH set to the project root)."
+            )
+        if integrity is None:
+            raise RuntimeError(
+                "Data-integrity migration 007 has not been applied to PostgreSQL. Run: "
+                "python backend/migrations/007_data_integrity.py --apply (see docs/runbook.md section 11)."
             )
         enforce_role_policy(app_is_superuser=bool(role and role["rolsuper"]))
         return
@@ -148,6 +155,12 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS checklist(id INTEGER PRIMARY KEY, phase TEXT, task TEXT, done INTEGER);
         """)
         c.executescript(SQLITE_DDL)
+        # M5 attribution columns (PostgreSQL: migration 007 / docker/postgres/04_integrity.sql).
+        columns = {r[1] for r in c.execute("PRAGMA table_info(escalations)")}
+        if "employee_id" not in columns:
+            c.execute("ALTER TABLE escalations ADD COLUMN employee_id TEXT REFERENCES employees(employee_id)")
+        if "message_id" not in columns:
+            c.execute("ALTER TABLE escalations ADD COLUMN message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL")
         if c.execute("SELECT COUNT(*) FROM checklist").fetchone()[0] == 0:
             seed = Path(settings.raw_dir) / "checklist.json"
             if seed.exists():
@@ -178,6 +191,8 @@ def message_exists(message_id: int) -> bool:
 def _message_dict(row):
     result = dict(row)
     result["found"] = bool(result["found"])
+    if "escalated" in result:
+        result["escalated"] = bool(result["escalated"])
     sources = result.get("sources")
     result["sources"] = json.loads(sources or "[]") if isinstance(sources, str) or sources is None else sources
     return result
@@ -214,11 +229,20 @@ def add_feedback(message_id: int, rating: str, comment: Optional[str]) -> int:
                           (message_id, rating, comment, _now()))
 
 
-def add_escalation(question: str, contact_pref: Optional[str]) -> int:
+def add_escalation(question: str, contact_pref: Optional[str], employee_id: Optional[str] = None,
+                   message_id: Optional[int] = None) -> int:
+    """Record an HR/IT escalation, attributed to the session employee (None for admin accounts)."""
     init_db()
     with _conn() as c:
-        return _insert_id(c, "INSERT INTO escalations(question, contact_pref, status, created_at) VALUES (?,?,?,?)",
-                          (question, contact_pref, "open", _now()))
+        return _insert_id(c, """INSERT INTO escalations(question, contact_pref, status, created_at, employee_id, message_id)
+            VALUES (?,?,?,?,?,?)""", (question, contact_pref, "open", _now(), employee_id, message_id))
+
+
+def find_escalation(message_id: int) -> Optional[int]:
+    """ID of an existing escalation of this chat message (escalating the same answer twice is idempotent)."""
+    with _conn() as c:
+        row = _execute(c, "SELECT id FROM escalations WHERE message_id = ? ORDER BY id LIMIT 1", (message_id,), one=True)
+    return row["id"] if row is not None else None
 
 
 def save_employee_message(employee_id: str, question: str, answer: str, found: bool, sources: List[Dict]) -> int:
@@ -239,6 +263,9 @@ def recent_employee_messages(employee_id: str, limit: int = 20) -> List[Dict]:
         employee = _execute(c, "SELECT 1 FROM employees WHERE employee_id = ?", (employee_id,), one=True)
         if employee is None:
             raise UnknownEmployeeError("Unknown employee ID")
-        rows = _execute(c, """SELECT * FROM messages WHERE employee_id = ?
-            ORDER BY id DESC LIMIT ?""", (employee_id, limit), all_rows=True)
+        # Latest rating and escalation state per message (optional fields; the chat UI shows them).
+        rows = _execute(c, """SELECT m.*,
+            (SELECT f.rating FROM feedback f WHERE f.message_id = m.id ORDER BY f.id DESC LIMIT 1) AS feedback,
+            EXISTS (SELECT 1 FROM escalations e WHERE e.message_id = m.id) AS escalated
+            FROM messages m WHERE m.employee_id = ? ORDER BY m.id DESC LIMIT ?""", (employee_id, limit), all_rows=True)
     return [_message_dict(row) for row in rows]

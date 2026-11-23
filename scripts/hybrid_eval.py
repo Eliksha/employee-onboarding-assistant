@@ -170,7 +170,7 @@ def grade(item, route_row, response, truth, fallback_text, refusal_text, markers
 class InProcess:
     """Isolated seeded SQLite copy + real index + configured LLM. Nothing outside the temp dir is written."""
 
-    label = "in-process (isolated seeded SQLite copy, real FAISS index read-only, local embeddings)"
+    label = "in-process (isolated seeded SQLite copy, active FAISS index version read-only, local embeddings)"
 
     def __init__(self, employee):
         os.environ["DB_BACKEND"] = "sqlite"
@@ -180,9 +180,12 @@ class InProcess:
         self.tmp = Path(tempfile.mkdtemp(prefix="onboardai-eval-"))
         settings.db_backend, settings.db_path = "sqlite", self.tmp / "eval.db"
         settings.log_dir = self.tmp / "logs"
-        index = Path(settings.index_dir)
-        if not (index / "faiss.index").exists():
-            raise SystemExit(f"FAISS index missing in {index}; build it first (python -m backend.services.ingest)")
+        from backend.services import ingest
+
+        try:
+            self.index_version = ingest.load_active()[0]
+        except ingest.IndexUnavailable as exc:
+            raise SystemExit(f"{exc}; build it first (python -m backend.services.ingest)")
         db.init_db()
         for name, call in (("001_employee_schema.py", lambda m: m.migrate(settings.db_path)),
                            ("002_seed_demo_data.py", lambda m: m.seed_demo_data(settings.db_path)),
@@ -358,7 +361,7 @@ def render(data, rows, summary, env_label, model):
     rt = summary["routing"]
     lines = [
         "# Hybrid Chat Evaluation Report (M3)", "",
-        f"Date: {date.today().isoformat()} | Commit: `{_git_commit()}` (plus uncommitted M3 changes) | "
+        f"Date: {date.today().isoformat()} | Commit: `{_git_commit()}` (plus uncommitted changes) | "
         f"Python {platform.python_version()} on {platform.system()}", "",
         f"Environment: {env_label}" + (f" | LLM: `{model}` via Groq (temporary)" if model else ""), "",
         f"Dataset: `tests/eval/heldout_questions.json` - {summary['n']} held-out questions, session employee "

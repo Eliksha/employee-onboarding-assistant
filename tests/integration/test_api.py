@@ -7,7 +7,8 @@ def test_health(app_client):
     assert r.status_code == 200 and r.json() == {"status": "ok", "database": "ok"}
 
 
-def test_chat_grounded_answer(emp1_client, monkeypatch, env):
+def test_chat_grounded_answer(emp1_client, monkeypatch, indexed_env):
+    env = indexed_env
     monkeypatch.setattr(env, "similarity_threshold", 0.1)
     monkeypatch.setattr(llm, "generate_answer", lambda q, p: "You get 8 casual leaves per year [Handbook 2.1].")
     r = emp1_client.post("/chat", json={"question": "How many casual leaves do I get in a year?"})
@@ -27,13 +28,15 @@ def test_chat_fallback_when_score_low_skips_llm(emp1_client, monkeypatch):
     assert body["found"] is False and body["sources"] == []
 
 
-def test_chat_fallback_when_llm_says_not_found(emp1_client, monkeypatch, env):
+def test_chat_fallback_when_llm_says_not_found(emp1_client, monkeypatch, indexed_env):
+    env = indexed_env
     monkeypatch.setattr(env, "similarity_threshold", 0.0)
     monkeypatch.setattr(llm, "generate_answer", lambda q, p: "NOT_FOUND")
     assert emp1_client.post("/chat", json={"question": "Tell me everyone's salary"}).json()["found"] is False
 
 
-def test_chat_validation_and_llm_error(emp1_client, monkeypatch, env):
+def test_chat_validation_and_llm_error(emp1_client, monkeypatch, indexed_env):
+    env = indexed_env
     assert emp1_client.post("/chat", json={"question": "   "}).status_code == 422
     assert emp1_client.post("/chat", json={"question": "x" * 501}).status_code == 422
     monkeypatch.setattr(env, "similarity_threshold", 0.0)
@@ -59,7 +62,8 @@ def test_legacy_checklist_is_admin_only(admin_client, app_client, accounts):
     assert app_client.patch("/checklist/1", json={"done": True}).status_code == 403
 
 
-def test_feedback_and_escalate(emp1_client, monkeypatch, env):
+def test_feedback_and_escalate(emp1_client, monkeypatch, indexed_env):
+    env = indexed_env
     monkeypatch.setattr(env, "similarity_threshold", 0.0)
     monkeypatch.setattr(llm, "generate_answer", lambda q, p: "8 per year")
     mid = emp1_client.post("/chat", json={"question": "casual leaves"}).json()["message_id"]
