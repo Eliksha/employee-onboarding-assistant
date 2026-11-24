@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHAT_MAX_LENGTH, answerActions, escalationPayload, formatSources } from './format.js';
+import { CHAT_MAX_LENGTH, answerActions, escalationPayload, escalationStatusLabel, formatSources, nextStatuses } from './format.js';
 
 test('cited sources are rendered as file › section', () => {
   assert.equal(
@@ -62,4 +62,19 @@ test('M5 escalation payload links the answer and respects the question limit', (
   assert.deepEqual(escalationPayload({ id: 7, question: 'What is the leave policy?' }),
     { question: 'What is the leave policy?', message_id: 7 });
   assert.equal(escalationPayload({ id: 8, question: 'x'.repeat(600) }).question.length, CHAT_MAX_LENGTH);
+});
+
+test('escalation status labels', () => {
+  assert.equal(escalationStatusLabel('in_progress'), 'In progress');
+  assert.equal(escalationStatusLabel('resolved'), 'Resolved');
+  assert.equal(escalationStatusLabel(null), '');
+  assert.equal(escalationStatusLabel('custom'), 'custom');
+});
+
+test('next statuses follow the backend transitions only', () => {
+  const transitions = { open: ['in_progress', 'resolved'], closed: [] };
+  assert.deepEqual(nextStatuses('open', transitions), ['in_progress', 'resolved']);
+  assert.deepEqual(nextStatuses('closed', transitions), []);
+  assert.deepEqual(nextStatuses('unknown', transitions), []);
+  assert.deepEqual(nextStatuses('open', undefined), []);
 });

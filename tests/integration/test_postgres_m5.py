@@ -89,12 +89,26 @@ def migrate(dbname):
         conn.close()
 
 
+def apply_008(dbname):
+    """Migration 008 (HR/IT queue, shared login rate limit) as the owner: required before roles are provisioned."""
+    from backend.services import hr_queue_schema
+
+    conn = admin(dbname)
+    try:
+        db_roles.apply_plan(conn, hr_queue_schema.build_ddl_plan())
+        assert hr_queue_schema.missing_objects(conn) == []
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @pytest.fixture(scope="module")
 def migrated(server):
     """Pre-M5 database with chat data, migrated by 007, with the 005 and 006 roles provisioned."""
     name = make_db(server)
     before = {t: rows(name, f"SELECT * FROM {t} ORDER BY 1") for t in ("messages", "feedback", "escalations")}
     steps = migrate(name)
+    apply_008(name)
     suffix = secrets.token_hex(3)
     info = {"dbname": name, "before": before, "steps": steps, "app": f"onboardai_app_n{suffix}",
             "reader": f"onboardai_reader_n{suffix}", "importer": f"onboardai_importer_n{suffix}",
@@ -137,9 +151,10 @@ def test_apply_is_complete_idempotent_and_preserves_data(migrated):
         conn.close()
     after = {t: rows(migrated["dbname"], f"SELECT * FROM {t} ORDER BY 1") for t in ("messages", "feedback", "escalations")}
     assert after["messages"] == migrated["before"]["messages"] and after["feedback"] == migrated["before"]["feedback"]
-    assert [{k: v for k, v in r.items() if k not in ("employee_id", "message_id")} for r in after["escalations"]] \
+    assert [{k: v for k, v in r.items() if k not in ("employee_id", "message_id", "updated_at", "resolution_note", "handled_by")} for r in after["escalations"]] \
         == migrated["before"]["escalations"]
-    assert all(r["employee_id"] is None and r["message_id"] is None for r in after["escalations"])
+    assert all(r["employee_id"] is None and r["message_id"] is None and r["updated_at"] is None and r["handled_by"] is None
+               for r in after["escalations"])   # columns added by 007 and 008 are NULL on existing rows
 
 
 def test_migrated_database_matches_the_schema_dictionary(migrated):
@@ -282,11 +297,16 @@ def test_backend_refuses_to_start_on_a_database_without_migration_007(server, mo
     with pytest.raises(RuntimeError, match="migration 007"):
         db.init_db()
     migrate(name)
+    with pytest.raises(RuntimeError, match="Migration 008"):
+        db.init_db()   # 007 alone is no longer enough: the HR/IT queue objects are required too
+    apply_008(name)
     # S2: the admin DSN is a superuser - refused by default (fail closed), allowed only by the development override.
     with pytest.raises(RuntimeError, match="privileged role"):
         db.init_db()
     monkeypatch.setattr(settings, "allow_privileged_db_connection", True)
     db.init_db()  # starts once migrated
     monkeypatch.setattr(settings, "app_env", "production")
+    # Isolate the role check: production also requires verified TLS (covered by test_privileged_db_connection.py).
+    monkeypatch.setattr(db.postgres, "validate_tls_settings", lambda: None)
     with pytest.raises(RuntimeError, match="privileged role"):
         db.init_db()  # the override is ignored outside development

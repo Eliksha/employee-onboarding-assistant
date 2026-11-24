@@ -72,6 +72,11 @@ def _fake_postgres(monkeypatch, role_row):
     monkeypatch.setattr(db, "_postgres", lambda: True)
     monkeypatch.setattr(db, "_conn", conn)
     monkeypatch.setattr(db, "_execute", execute)
+    # Migrations 007 (full schema check) and 008 are complete in this fake; tests below cover their absence.
+    monkeypatch.setattr(db.db_integrity, "schema_problems", lambda con: [])
+    monkeypatch.setattr(db.hr_queue_schema, "missing_objects", lambda con: [])
+    monkeypatch.setattr(settings, "pg_sslmode", "verify-full")
+    db._VERIFIED_CONFIGS.clear()
 
 
 @pytest.mark.parametrize("row", [{"rolsuper": True, "rolbypassrls": False}, {"rolsuper": False, "rolbypassrls": True}])
@@ -98,3 +103,51 @@ def test_compose_pins_the_override_off_for_the_backend():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     backend = compose.split("\n  backend:")[1].split("\n  frontend:")[0]
     assert 'ALLOW_PRIVILEGED_DB_CONNECTION: "false"' in backend
+
+
+# ---------------------------------------------------------------- startup integrity checks (audit D2, migration 008, TLS)
+def test_startup_refuses_an_incomplete_migration_007(monkeypatch):
+    _fake_postgres(monkeypatch, {"rolsuper": False, "rolbypassrls": False})
+    monkeypatch.setattr(db.db_integrity, "schema_problems", lambda con: ["missing constraint feedback_rating_check"])
+    with pytest.raises(RuntimeError, match="007 is incomplete.*feedback_rating_check"):
+        db.init_db()
+
+
+def test_startup_refuses_without_migration_008(monkeypatch):
+    _fake_postgres(monkeypatch, {"rolsuper": False, "rolbypassrls": False})
+    monkeypatch.setattr(db.hr_queue_schema, "missing_objects", lambda con: ["login_failures table"])
+    with pytest.raises(RuntimeError, match="Migration 008.*login_failures table"):
+        db.init_db()
+
+
+@pytest.mark.parametrize("mode", ["disable", "prefer", "require", "verify-ca"])
+def test_production_startup_requires_verified_database_tls(monkeypatch, mode):
+    monkeypatch.setattr(settings, "app_env", "production")
+    _fake_postgres(monkeypatch, {"rolsuper": False, "rolbypassrls": False})
+    monkeypatch.setattr(settings, "pg_sslmode", mode)
+    with pytest.raises(RuntimeError, match="verify-full"):
+        db.init_db()
+
+
+def test_invalid_ssl_mode_and_missing_ca_bundle_are_refused(monkeypatch, tmp_path):
+    _fake_postgres(monkeypatch, {"rolsuper": False, "rolbypassrls": False})
+    monkeypatch.setattr(settings, "pg_sslmode", "sometimes")
+    with pytest.raises(RuntimeError, match="PG_SSLMODE must be one of"):
+        db.init_db()
+    monkeypatch.setattr(settings, "pg_sslmode", "verify-full")
+    monkeypatch.setattr(settings, "pg_sslrootcert", str(tmp_path / "missing-ca.pem"))
+    with pytest.raises(RuntimeError, match="PG_SSLROOTCERT") as exc:
+        db.init_db()
+    assert str(tmp_path) not in str(exc.value)   # the path is not echoed
+
+
+def test_startup_checks_run_once_per_configuration(monkeypatch):
+    calls = []
+    _fake_postgres(monkeypatch, {"rolsuper": False, "rolbypassrls": False})
+    monkeypatch.setattr(db.hr_queue_schema, "missing_objects", lambda con: calls.append(1) or [])
+    db.init_db()
+    db.init_db()
+    assert len(calls) == 1
+    monkeypatch.setattr(settings, "pg_user", "another_role")   # different configuration -> checked again
+    db.init_db()
+    assert len(calls) == 2

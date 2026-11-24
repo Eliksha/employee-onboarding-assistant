@@ -12,11 +12,11 @@ CREATE TABLE IF NOT EXISTS public.user_accounts (
     email text NOT NULL UNIQUE,
     password_hash text NOT NULL,
     employee_id text UNIQUE REFERENCES public.employees(employee_id),
-    role text NOT NULL DEFAULT 'employee' CHECK (role IN ('employee', 'admin')),
+    role text NOT NULL DEFAULT 'employee' CHECK (role IN ('employee', 'admin', 'hr')),
     is_active integer NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
     created_at bigint NOT NULL,
     updated_at bigint NOT NULL,
-    CONSTRAINT user_accounts_employee_required CHECK (role = 'admin' OR employee_id IS NOT NULL)
+    CONSTRAINT user_accounts_employee_required CHECK (role IN ('admin', 'hr') OR employee_id IS NOT NULL)
 );
 CREATE TABLE IF NOT EXISTS public.user_sessions (
     token_hash text PRIMARY KEY,

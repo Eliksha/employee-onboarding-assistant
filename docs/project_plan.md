@@ -4,8 +4,8 @@
 **Domain:** Generative AI for Human Resources  
 **Team member:** Eliksha Maheshwari  
 **Location:** Pune  
-**Mentor:** Shankhalika Sarkar  
-**Last updated:** 23 November 2026
+**Mentor:** Kanishka Vatsa  
+**Last updated:** 24 November 2026  
 
 **Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026). M3 (engineering baseline and automated evaluation) committed. M4 (CSV import role, schema dictionary, canonical PDF RAG with versioned index, routing fixes) approved. M5 (feedback and escalation from chat, migration 007 data integrity, API docs restriction, nginx security headers) implemented and verified on disposable databases, a clone of the live database and isolated containers; **M4 + M5 committed and pushed to `dev` (`cde4538`; all four GitHub CI checks passed) and ACTIVATED on the local Docker stack (23 November 2026)** - see "M4 + M5 Local Activation" at the end of this file. Pending: handbook page-citation check and employee-level authorization check on the activated stack.
 
@@ -942,7 +942,7 @@ As in [runbook section 9](runbook.md#9-database-roles-least-privilege), with one
 |---|---|---|
 | 1. Running Docker database healthy | **PASS** | db, backend and frontend containers healthy; `pg_isready` accepting connections; `/api/health` 200 `database: ok`; PostgreSQL 16.16, 8.3 MB; no other client sessions |
 | 2. Usable backup exists | **PASS** (created during preflight) | None existed for the Docker PostgreSQL database (only SQLite files from 20 Nov). Created `onboardai_local_backups/postgres_docker/onboardai_pre_phase1_20261123_121605.dump` outside the repository (pg_dump custom format, 23,699 bytes, SHA-256 `a144332004654d81dfe0cbdc2031e54097bc74e9a364c60a5c19c5142c0b1657`). Restored into a throwaway container with `pg_restore --exit-on-error`: all 12 tables and every row count match live. Restoring needs a fresh `postgres:16` container with `POSTGRES_USER=onboardai`. The file contains one account's password hash: keep it local |
-| 3. Role passwords and scope secret configured securely | **PASS** (after owner decision) | Initially none were set anywhere. Owner chose a locked file outside the repository: `onboardai_secrets/phase1.env`, ACL `labuser` FullControl only, inheritance disabled, not in git. Holds the existing `DOCKER_PG_PASSWORD` (copied from the running container's configuration, unchanged, consistent with the backend), new app and reader passwords (43 characters each), new scope secret (64 characters), and `BACKEND_PORT=8001` / `FRONTEND_PORT=8080` so a recreate keeps the current ports. No value was displayed or logged. Runbook section 9 documents the file |
+| 3. Role passwords and scope secret configured securely | **PASS** (after owner decision) | Initially none were set anywhere. Owner chose a locked file outside the repository: `<secrets-file>` (outside the repository), ACL owner FullControl only, inheritance disabled, not in git. Holds the existing `DOCKER_PG_PASSWORD` (copied from the running container's configuration, unchanged, consistent with the backend), new app and reader passwords (43 characters each), new scope secret (64 characters), and `BACKEND_PORT=8001` / `FRONTEND_PORT=8080` so a recreate keeps the current ports. No value was displayed or logged. Runbook section 9 documents the file |
 | 4a. Runbook step 1: `docker compose build backend` | **PASS** | Image rebuilt; the running backend container is still on its original image (not recreated) |
 | 4b. `--verify` on the live database | **PASS** (expected exit 1) | Problems are exactly `role onboardai_app does not exist`, `role onboardai_reader does not exist` |
 | 4c. Dry run on the live database | **PASS** | Exit 0; 75 statements planned, identical to the preview on the verified backup restore; no errors or notes; nothing created; 0 secret values in output |
@@ -980,9 +980,9 @@ Add the switch variables to the secrets file and recreate only the backend (`doc
 
 **Not performed (by design, non-invasive):** sign-in with the real account and data writes on the live stack. App-role writes (checklist, tickets, chat history, feedback, sessions) were verified on the clone with the identical plan (26/26 in state D). **Recommended owner check:** sign in at http://localhost:8080, toggle a checklist item, ask the assistant one question.
 
-**Rollback (if ever needed):** remove the `# Runbook step 4` block from `onboardai_secrets/phase1.env` and run `docker compose --env-file <file> up -d --no-deps backend`; the backend returns to the owner account. Full database restore: the pre-activation backup above.
+**Rollback (if ever needed):** remove the `# Runbook step 4` block from `<secrets-file>` and run `docker compose --env-file <file> up -d --no-deps backend`; the backend returns to the owner account. Full database restore: the pre-activation backup above.
 
-**Operating note:** from now on run compose commands with `--env-file C:\Users\Administrator\Desktop\employee-onboarding-assistant-day31\onboardai_secrets\phase1.env` (runbook section 9). Without it, compose cannot interpolate `DOCKER_PG_PASSWORD`, and a recreate would not use the least-privilege roles.
+**Operating note:** from now on run compose commands with `--env-file <path-to-secrets-file>` (runbook section 9). Without it, compose cannot interpolate `DOCKER_PG_PASSWORD`, and a recreate would not use the least-privilege roles.
 
 **Remaining risks:** the existing `DOCKER_PG_PASSWORD` is weak (11 characters) and its rotation is still deferred; the secrets file and the backup are plaintext on disk (owner-only ACL; also keep the values in a password manager); the backup contains one password hash; in-memory login rate limiter; no HTTPS locally.
 
@@ -1154,7 +1154,7 @@ Review of all uncommitted changes (Phase 1 least-privilege roles, signed employe
 
 - 18 modified and 10 new files, all intended. No migration is outstanding: migration 005 is already applied to the live database and is committed as code for reproducibility.
 - Secret scan: the real values of every key, password and scope secret in `.env` and the external secrets file were searched for in the diff and all new files - **none found**. `.env.example` and `docker-compose.yml` contain only placeholders and variable references.
-- Not in the repository / ignored: `.env`, `data/*.db` (including backups), `data/index/*`, `logs/`, `frontend/dist/`, `node_modules/`, caches. The database backup (`onboardai_local_backups/`) and the secrets file (`onboardai_secrets/phase1.env`) are outside the repository. Temporary validation scripts stayed in the session scratch directory.
+- Not in the repository / ignored: `.env`, `data/*.db` (including backups), `data/index/*`, `logs/`, `frontend/dist/`, `node_modules/`, caches. The database backup (`onboardai_local_backups/`) and the secrets file (`<secrets-file>`) are outside the repository. Temporary validation scripts stayed in the session scratch directory.
 - `git diff --check`: clean after two whitespace fixes (trailing spaces in this file, blank line at end of `backend/services/db_roles.py`).
 - Tests at commit time: backend 445 passed (+77 live-PostgreSQL tests passed on a disposable server), frontend 8/8, lint clean.
 
@@ -1633,3 +1633,262 @@ Rebuild the backend from `445ffce` with the previous `.env` (Groq); no database 
 - Authenticated functional checks ran on a clone with the rebuilt images, not with the owner's live account (no live records or accounts were created); a short manual browser check on the live stack remains advisable.
 - API-key authentication from a local secrets file; Key Vault / managed identity (Entra ID) pending with Azure hosting. Synthetic handbook text and user questions are sent to Azure; `store=False` disables stored responses.
 - Evaluation is a single run (62 + 50 questions); GitHub CI has not run on these changes yet (not pushed).
+
+## Deployment Readiness and Audit Closure - CHECKPOINT (24 November 2026, paused for VM logout)
+
+**Status: IN PROGRESS, NOT COMMITTED.** Baseline commit `78b80ee` (CI green). Mentor corrected to **Kanishka Vatsa**. The Azure team reports that the required resource types are now enabled; **no Azure resource has been provisioned and no Azure CLI command has been executed**. The live local Docker stack, its database volume, records and the active FAISS index were not changed (read only with `pg_dump` / `SELECT`); it still runs the `78b80ee` images.
+
+### Implemented in this batch (working tree)
+
+| Area | Change |
+|---|---|
+| PostgreSQL TLS | `PG_SSLMODE` / `PG_SSLROOTCERT` for the app, migrations and CSV import; `APP_ENV=production` refuses to start unless `verify-full` (certificate chain and host name) |
+| Connection pool | `backend/services/postgres.py`: bounded pool per credential set (`PG_POOL_MAX_SIZE`=5), wait timeout -> 503, pre-ping of idle connections, maximum lifetime, discard after connection errors, reset on return (ROLLBACK + DISCARD ALL); the signed employee scope is transaction-local and never survives into the next lease |
+| Startup integrity (audit D2) | Full migration-007 schema check, migration-008 check and TLS check at startup (once per configuration) |
+| Readiness (audit R2) | `GET /ready`: database, migrations, FAISS index, embedding model, required configuration (ok/unavailable only); `/health` unchanged |
+| HR/IT escalation queue (audit F6) | The problem statement names HR/IT as escalation receivers, so: new `hr` role, `GET/PATCH /hr/escalations` (HR only, CSRF, no-store), workflow open -> in_progress -> resolved -> closed with notes, audit trail of creation, every view and every change (`escalation_events`), privacy (only the escalated question/answer and employee name/ID), employee chat shows the HR status; React HR queue view. Delivery is in-app only (no e-mail or ticketing integration) |
+| Migration 008 | `backend/migrations/008_hr_escalation_queue.py` + `docker/postgres/05_hr_queue.sql` (identical, test-enforced), additive only. **Order on an existing database: backup -> 008 --apply -> 008 --verify**, then rebuild the backend image (the new backend refuses to start without 008) |
+| Shared login rate limit (audit S10) | `login_failures` table (SHA-256 keys, pruned), shared by all workers and instances; in-memory limiter bounded |
+| Trusted proxies | `TRUSTED_PROXY_HOPS` (with port stripping); `BACKEND_PROXY_SECRET` header required by the backend except on `/health` and `/ready` |
+| Prompt injection (audit S6) and failures | Wrapper tags neutralised in the question too; database outages -> 503 + Retry-After without details |
+| CSP / fonts | Fonts bundled (`@fontsource` 5.3.0); CSP is `'self'` only (Google origins removed) |
+| Non-superuser provisioning (Azure) | Migration 005 no longer needs superuser or `pg_read_all_stats`: inherited membership in the reader role for the verifier owner; ALTER ROLE only for attributes that differ |
+| Azure images | `deploy/azure/backend.Dockerfile` (PDF, ACTIVE index version and embedding model baked in and verified at build; read-only; production defaults; OS upgrades); `deploy/azure/frontend.Dockerfile` (Alpine nginx package, envsubst entrypoint, HSTS, HTTPS upstream with SNI and certificate verification, proxy key); allow-list `.dockerignore` files |
+| Azure automation | `deploy/azure/`: module, `00-Preflight` (incl. an ARM *validate* policy check), `10-Provision-Database`, `20-Provision-Registry`, `30-Publish-Images`, `40-Provision-AppService`, `50-Configure-Apps`, `60-Migrate-Database`, `config.example.psd1`; every script is a dry run unless `-Execute` |
+
+### Verified results (24 November 2026, Docker Python, synthetic or cloned data)
+
+| Check | Result |
+|---|---|
+| Backend suite (Docker, Python 3.12) | **696 passed** |
+| Live PostgreSQL suites (disposable server) | **133 passed** with the pool off; pool on: 6 of 7 runs 133/133, 1 run had 1 statement-timeout failure (**open item**) |
+| Frontend | 13/13 tests, lint clean, build OK |
+| Migration rehearsal (`60-Migrate-Database.ps1 -Execute -SkipFirewall`) against an Azure-like PostgreSQL 16 (non-superuser administrator, TLS required) | Passed in 47 s: 12/12 data fingerprints identical (incl. Argon2 hashes and the scope key), 005/007/008 verified, scope key matches the secret. Two real defects found and fixed on the way (008 statement splitter; 005 superuser assumption) |
+| TLS negative tests | IP instead of host name, untrusted CA, plaintext: all refused; production with `require` refused at startup |
+| Production images end to end (App Service-like proxies, HTTPS) | **32/32**: authentication, Secure cookies, checklist/CSRF, status, leave, isolation, GPT-4.1 citations (p. 3), fallback, mixed, injection, feedback, escalation, HR queue workflow and audit, headers/HSTS/CSP, proxy key, rate limit through 3 hops with spoofed X-Forwarded-For ignored; a second client is unaffected |
+| In-container Azure OpenAI | 11/11 (real GPT-4.1 2.5 s; timeout 1.8 s incl. retries; 401/404 sanitised; fail closed) |
+| Restart recovery | Database restart under load: 5 of 76 requests got 503 during ~2.3 s, then automatic recovery; session kept; no tracebacks |
+| Backup/restore drill (non-superuser, TLS) | Dump 56 KB in 5 s, restore 8 s with roles and policies, fingerprints identical |
+| Performance (backend capped at 1 vCPU, approximating P0v3) | Idle 278 MiB backend / 11 MiB frontend. Records path, 10 users: 56 req/s, p50 176 ms, p95 270 ms, 0 errors, peak 342 MiB. Handbook (GPT-4.1), 5 users: p50 2.4 s, p95 4.0 s, 20/20 HTTP 200 (6 safe fallbacks: 4 questions not in the handbook, 2 inconsistent on a borderline question). Startup to ready: backend 7-11 s, frontend 3-4 s. **P0v3 (1 vCPU / 4 GB) fits both apps for demo load** |
+| Images | Backend 847 MB, frontend 27.6 MB. Trivy: backend 0 fixable HIGH/CRITICAL (53 without a Debian fix), frontend 0 HIGH/CRITICAL |
+| Dependency / source scans | pip-audit 0, npm audit 0; bandit 0 high, 5 medium = reviewed false positives (allow-listed identifiers, parameterised values) |
+| Logs | No API key, endpoint, proxy secret or traceback |
+
+### Open items / remaining tasks (resume here)
+
+1. Investigate the intermittent pool-enabled PostgreSQL test failure (statement timeout, 1 of 7 runs).
+2. Write `70-Verify-Deployment.ps1`, `90-Rollback.ps1`, `Test-DeploymentScripts.ps1` (parse all scripts, dry-run every step, check every `az` flag against `az ... --help`) and `deploy/azure/README.md` (deployment runbook).
+3. Re-run the RAG (50) and held-out (62) evaluations on Azure GPT-4.1 against this code.
+4. Documentation: README, architecture (plus Azure, RAG, hybrid routing, security and escalation diagrams), runbook (section 14: migration 008 activation; Azure), demo script and storyboard, superseded banners, audit closure matrix, requirement traceability (only `docs/problem_statement.md` and the milestone table are in the repository; the original assessment brief is not available), presentation content, submission checklist, packaging without secrets or dumps.
+5. Optional: the same OS-package hardening for the local stack Dockerfiles.
+6. Live local stack activation (needs owner approval): backup -> 008 --apply -> rebuild backend and frontend.
+7. Azure provisioning and deployment (needs owner approval): run the scripts in order with `-Execute`.
+
+### How to resume after logout
+
+- All changes are saved in the working tree (uncommitted, nothing staged).
+- Rehearsal tooling (no secrets) is copied to `onboardai_local_backups/rehearsal_tooling_20261124/` outside the repository; throwaway containers, the simulation network, test accounts and certificates were removed.
+- Docker test runner: build `onboardai-test:local` from `rehearsal_tooling_20261124/test-runner.Dockerfile` (FROM the local backend image plus `requirements-dev.txt`), then run pytest with the repository mounted read-only at `/src` (PostgreSQL suites need `ONBOARDAI_PG_TEST_ADMIN_DSN` and a disposable server).
+- Production images: `docker build -f deploy/azure/backend.Dockerfile -t onboardai-backend:azure-local .` (same for `frontend.Dockerfile`).
+
+## Deployment-Critical Completion (24 November 2026, deadline 8 PM IST)
+
+**Status: deployment-critical work COMPLETE and validated locally; NOT COMMITTED; nothing provisioned or deployed in Azure.** The owner reports existing resources: backend Web App `onboardai-eliksha-backend`, a Linux P0v3 plan, ACR `onboardaielikshaacr` (Basic, TenantReuse, admin disabled), Azure OpenAI GPT-4.1, region South India; PostgreSQL and the remaining infrastructure are being provisioned by the owner. **Blocker for discovery: the Azure CLI on the VM is not signed in (`az login` required).** The live local stack is unchanged (still `78b80ee` images).
+
+### 1. Intermittent PostgreSQL timeout - root cause and fix
+
+Root cause: a defect in the new test `test_session_settings_are_reset_between_leases` (tests/integration/test_postgres_m6.py) - it set `statement_timeout = 1` (1 ms) and then ran two more statements, which were cancelled whenever they took longer than 1 ms on a busy machine. It was the only 1 ms timeout in the code base; product code was not involved. Fix: a distinctive safe value (`'7s'`); the test still proves that the pooled session is reset to the configured 10 s. Re-run: **133/133 in all 4 runs** (pool on x3, pool off x1) on a disposable PostgreSQL 16.
+
+### 2. Deployment scripts - completed and validated
+
+| Script | Purpose / change |
+|---|---|
+| `05-Discover-Resources.ps1` (new) | Read-only discovery -> git-ignored `config.psd1`: resource group, region, **actual plan name and SKU** (from the backend app), **ACR login server** (TenantReuse/DNL registries have a hashed host name - image names now use it), PostgreSQL server, **FQDN** and admin login, frontend app presence, image tag (commit + timestamp) |
+| `10`, `20`, `40` | Now **reuse** existing resources (create only if missing) and always apply the security configuration (TLS, admin user off, managed identity + AcrPull, HTTPS only, TLS 1.2, FTPS/basic auth off, health checks) |
+| `50`, `60` | Use the discovered PostgreSQL FQDN and backend host name |
+| `70-Verify-Deployment.ps1` (new) | 16 HTTPS checks + direct-backend refusal; Windows PowerShell 5.1 compatible |
+| `90-Rollback.ps1` (new) | Previous image tag for both apps (tag existence checked), restart, verify; prints (never runs) the point-in-time-restore command |
+| `Test-DeploymentScripts.ps1` (new) | Parser check of all scripts, dry run of every step, every `az` flag checked against the installed CLI help, redaction check |
+| `README.md` (new) | Deployment runbook (order, commands, rollback) |
+
+Validation: `Test-DeploymentScripts.ps1` - 12/12 scripts parse, 8/8 steps dry-run, **43/43 distinct az command lines valid against Azure CLI 2.91**, no secret in any output. It found **4 real defects, all fixed**: `firewall-rule create/delete` used the old `--name <server> --rule-name` syntax (2.91: `--server-name <server> --name <rule>`), and `flexible-server db create/show` used `--database-name` (2.91: `--name`). `70-Verify-Deployment.ps1` against the production images in the Azure-like simulation: **16/16** (handbook answer 1.7 s). `60-Migrate-Database.ps1` second rehearsal: passed, 12/12 fingerprints identical.
+
+### 3. Evaluations (Azure GPT-4.1, this code)
+
+| Evaluation | Result |
+|---|---|
+| RAG evaluation (`docs/rag_eval_report.md`, Docker) | **50/50**: index 6/6, retrieval 17/17, grounding 17/17, unknown 7/7, prompt injection 3/3 |
+| Held-out (`docs/azure_eval_report.md`), end to end over HTTPS on the **production images** against the Azure-like PostgreSQL (TLS verify-full) | routing 62/62; records 26/26; unauthorized 8/8, 0 leaks; retrieval 30/30 (MRR 0.978); grounded 30/30, 0 false fallbacks; citations 30/30, precision 1.00; mixed 10/10; out-of-scope 6/6; 0 errors. Latency p50/p95 ms: records 55/107, handbook 1,706/3,040, mixed 1,546/2,189 |
+| Backend suite (Docker) | 696 passed (unchanged code since) |
+
+### 4. Local activation - prepared, awaiting owner approval (not executed)
+
+Order (the running backend image predates migration 008, so the new images are built first; building does not touch running containers):
+1. Tag the current images for rollback: `docker tag employee-onboarding-assistant-backend:latest employee-onboarding-assistant-backend:pre-008` (same for frontend).
+2. Backup (runbook section 12): `pg_dump -Fc -f` inside the db container, `docker compose cp` to `backups\`, `pg_restore -l` check.
+3. `docker compose --env-file <secrets> build backend frontend`.
+4. `docker compose --env-file <secrets> run --rm --no-deps -e PG_ADMIN_USER=onboardai -e PG_ADMIN_PASSWORD backend python backend/migrations/008_hr_escalation_queue.py --apply`, then `--verify`; 007 and 005 `--verify`.
+5. `docker compose --env-file <secrets> up -d --no-deps --wait backend frontend`; checks: `/api/health`, `/ready` inside the container, record counts unchanged.
+Rollback: retag `pre-008` images and `up -d` (008 is additive; the old code ignores the new tables).
+
+### Next (after deployment)
+
+Presentation, detailed documentation, storyboard, submission packaging and Blob Storage integration are deferred until after a successful deployment (owner decision).
+
+## Local Activation of Migration 008 + Azure Discovery (24 November 2026, owner-approved)
+
+**Status: local stack ACTIVATED on the new images; Azure deployment BLOCKED (PostgreSQL by policy).** Nothing committed or staged; no Azure resource created or modified.
+
+### Local activation (approved by the owner)
+
+| Step | Result |
+|---|---|
+| Before | live counts messages/feedback/escalations/completed tasks/accounts/tickets = 18/0/1/7/1/0 |
+| Rollback images | `employee-onboarding-assistant-backend:pre-008` (cc84ac32d175), `...-frontend:pre-008` (65fac941e7e9) |
+| Backup | `backups/onboardai_pre008_20261124_171502.dump` (44.6 KB, `pg_dump -Fc -f` in the container + `docker cp`); `pg_restore -l`: 13 table-data entries; full restore into a throwaway server: counts identical (18/0/1/7/1/0) |
+| Build | `docker compose build backend frontend` (177 s; running containers untouched) |
+| Migration 008 | dry run, then `--apply`: 13 DDL statements + 10 grants, verified; `008 --verify`, `007 --verify`, `005 --verify` (`key_matches_secret: true`, no problems) all clean; counts unchanged |
+| Restart | `up -d --no-deps --wait backend frontend` (29 s): all three containers healthy on the new images (backend 2c9603385f4a, frontend b818bb469aea) |
+| Public smoke | `/ready` all 5 components ok; `/` 200, `/api/health` 200, `/api/docs` and `/api/openapi.json` 404, `/api/employees/EMP001` and `/api/hr/escalations` 401 unauthenticated, generic login error, CSP self-only + X-Frame-Options + nosniff; backend log 0 errors |
+| Authenticated smoke (new local images against a throwaway clone of the live database incl. 008; live records untouched) | **27/27** (auth, CSRF, checklist, status, leave, isolation, GPT-4.1 citation p. 3, fallback, mixed, feedback, escalation, history, headers, docs 404, invalid Azure key -> 503 and records part kept); logs: 0 tracebacks, 0 secrets |
+| After | live counts 18/0/1/7/1 unchanged (one expected `login_failures` row from the wrong-password smoke test, expires after 15 minutes) |
+
+Rollback (if needed): `docker tag ...:pre-008 ...:latest` for both images, `docker compose --env-file <secrets> up -d --no-deps backend frontend`; 008 is additive and ignored by the old code. Minor difference noted: the local nginx still serves `/api/ready` (the Azure template hides it); localhost-only, low risk.
+
+### Azure discovery (read-only, config dir `%USERPROFILE%\.azure-onboardai`)
+
+| Resource | Discovered |
+|---|---|
+| Resource group / region | `<resource-group>`, South India |
+| App Service plan | `<app-service-plan>`, P0v3, Linux, 1 app |
+| Backend Web App | `onboardai-eliksha-backend`, host **`<backend-host>.azurewebsites.net`** (unique default host name, not `<name>.azurewebsites.net`), HTTPS only, **sitecontainers model**, no VNet integration, public access enabled |
+| Frontend Web App | not present yet |
+| ACR | `onboardaielikshaacr`, Basic, admin disabled, login server **`<acr-login-server>`** (TenantReuse hash) |
+| PostgreSQL / VNet / private DNS | none exist |
+| Other | Log Analytics, Application Insights, AI Foundry account `<azure-openai-resource>` (Azure OpenAI) |
+
+**Root cause of the PostgreSQL failure (activity log, 11:40 UTC):** the portal deployment was rejected at validation by Azure Policy **"Sandbox: Allowed resource types"**: the private DNS zone `onboardai-eliksha-db.private.postgres.database.azure.com` (Microsoft.Network/privateDnsZones) and a second generated resource `smcxxjkqtwy5w` (type not shown in the log) are not allowed. The sandbox account cannot read the policy's allowed-type list (AuthorizationFailed). A validate-only probe showed that **Azure Container Instances are not authorised** for this account; the probe was then interrupted because the token now requires **MFA re-authentication** (AADSTS50076).
+
+### Script changes from the discovery
+
+- `Set-WebAppImage` (module): the backend uses the App Service **sitecontainers** model, so images are set with `az webapp sitecontainers update/create` (main container, target port, system-assigned identity for ACR pulls); classic apps still use `config container set`. Used by 40 and 90.
+- Validator now also checks the commands that only run against existing resources (sitecontainers, identity, role assignment, ACR update, firewall cleanup, PITR): **0 failures**.
+
+### Remaining deployment blockers
+
+1. **Azure Policy**: private PostgreSQL needs Microsoft.Network/privateDnsZones and privateDnsZones/virtualNetworkLinks (and, for VNet integration, Microsoft.Network/virtualNetworks with delegated subnets) to be allowed; identify the type of `smcxxjkqtwy5w`. Owner/Azure team action.
+2. **MFA re-authentication** of `%USERPROFILE%\.azure-onboardai` (`az login` with the claims challenge). Owner action.
+3. **Migration path inside the VNet** (no public database access): ACI is not authorised. Options for the owner to decide: (a) migrate through the backend Web App once it has VNet integration, using the App Service SSH tunnel (`az webapp create-remote-connection`) into the backend container - requires adding an SSH server and PostgreSQL client tools to the backend image (Microsoft-documented pattern, reachable only through the authenticated SCM tunnel); (b) start the Azure database fresh from the repository schema/seed (`docker/postgres/01-05`) plus roles (005) run from inside the VNet by the backend image at deployment, and re-create the owner account - no local data transfer (local chat history and the one escalation are not migrated).
+4. Backend VNet integration (delegated subnet) and the frontend Web App: after the policy exception, with owner approval.
+
+## Private PostgreSQL + SSH-Based In-VNet Migration (24 November 2026)
+
+**Decision (owner): private PostgreSQL connectivity only - no public database access, no temporary public firewall rules; migration Option A (App Service SSH tunnel) to preserve all existing data.** Confirmed by the owner from the Activity Log: the sandbox policy denies `Microsoft.Network/privateDnsZones` and `Microsoft.Network/privateDnsZones/virtualNetworkLinks` (`smcxxjkqtwy5w` = the VNet link). Nothing was created or modified in Azure; nothing staged or committed.
+
+### Prepared and validated without the policy update
+
+| Item | Result |
+|---|---|
+| `deploy/azure/migration/` (temporary migration image) | `migration.Dockerfile` = production backend image + OpenSSH server + PostgreSQL client + `onboardai-in-vnet-migrate`; `sshd_config`: port 2222, **ed25519 public key only**, no passwords, no keyboard-interactive, **no root**, `AllowUsers appuser`, no TCP/agent/stream/X11 forwarding, no tunnels; fresh host key per start; `appuser` password locked; application NOT started (maintenance responder: 200 for the App Service start-up probe, 503 for everything else); no secret baked in or stored |
+| `in-vnet-migrate.sh` (runs inside the container, i.e. inside the VNet) | secrets only on stdin (strict KEY=VALUE allow-list, BOM/CRLF-safe, values may contain '='); TLS verify-full; **refuses a non-empty target**; one-transaction restore (pg_restore 17 renders SQL, the 17-only `transaction_timeout` setting is dropped for the 16 server); fingerprint comparison; 008 then 005 (scope key kept); verify 007/008/005; application-role startup checks; **automatic rollback to an empty database on any error**; uploads shredded |
+| `65-Migrate-Database-InVNet.ps1` | one-time key pair (current-user ACL) -> dump/list/fingerprints (source read-only) -> build/push `<tag>-migrate` -> set `MIGRATION_SSH_AUTHORIZED_KEY` -> switch backend to the migration image -> `az webapp create-remote-connection` (127.0.0.1) -> scp + migrate -> **finally always**: shred uploads, close tunnel, delete the key setting, switch back to the PRODUCTION image (no SSH server), delete local key and dump; prints the PostgreSQL admin-password rotation command (needs approval). `-Rollback` empties the target through the same path |
+| `15-Provision-Network.ps1` (new) | VNet, `snet-postgres` (delegated to PostgreSQL), `snet-app` (delegated to App Service), private DNS zone `<server>.private.postgres.database.azure.com` + VNet link, backend regional VNet integration with route-all; reuse-aware |
+| `10-Provision-Database.ps1` | creates the server **private only** (`--vnet/--subnet/--private-dns-zone`, no `--public-access`); refuses to reuse a server with public access |
+| `50-Configure-Apps.ps1` | no database firewall rules at all; refuses a public server; warns if the backend lacks VNet integration |
+| `60-Migrate-Database.ps1` | firewall code removed; refuses to run against Azure (local rehearsal only) |
+| Validator (`Test-DeploymentScripts.ps1`) | 14/14 scripts parse, 10/10 steps dry-run, **55/55 az command lines + 17 conditional commands valid against Azure CLI 2.91**, no secret in any output, new rule: **no database firewall rule and no `--public-access` in any step** - 0 failures |
+| Backend suite (Docker) | **701 passed** (+5 static security tests of the migration tooling: key-only sshd, entrypoint, no SSH/DB client in production images, refusal/rollback/TLS in the migration script, no public database in any script) |
+
+### Local rehearsal of the SSH migration (Azure-like private target: PostgreSQL 16, TLS required, non-superuser admin)
+
+| Check | Result |
+|---|---|
+| SSH access | password login refused; root refused (even with the right key); a different key refused; the one-time key for `appuser` accepted; stdio/TCP forwarding to the database refused ("administratively prohibited") |
+| Migration via `65 -SkipAzure` (container port on 127.0.0.1 standing in for the SCM tunnel) | **passed in 25 s**: TLS 1.3 verify-full, one-transaction restore, **12/12 fingerprints identical** (incl. Argon2 hashes and the scope key), 008 + 005 (82 statements, scope key matches), verification clean, app-role startup checks passed, uploads shredded, local key/dump deleted |
+| Safety | second migration against the populated target **refused** (14 tables untouched); 0 files left in the upload directory; **0 secret values** in container logs, process environments or the env file |
+| Rollback | `-Rollback`: database recreated empty, application roles removed; re-migration afterwards succeeded |
+| Production image on the migrated database | `/ready` 200 (database, schema, index, model, configuration ok); no SSH server in the production container |
+| Defects found and fixed during the rehearsal | parent directory permissions of the maintenance responder; PowerShell 5.1 stderr-as-error and UTF-8 BOM on stdin; PowerShell comma/plus precedence in the secrets list (values were concatenated - refused safely); IFS parsing that would strip a trailing '=' from secrets; pg_restore 17 vs server 16 (`transaction_timeout`). In every failure the script failed closed, printed no secret and ran its cleanup/rollback |
+
+### Remaining blockers / owner actions
+
+1. Policy exception for `Microsoft.Network/privateDnsZones` and `Microsoft.Network/privateDnsZones/virtualNetworkLinks` (Azure team).
+2. MFA re-authentication of `%USERPROFILE%\.azure-onboardai` (owner).
+3. Add `AZURE_PG_ADMIN_PASSWORD` to the secrets file (owner; the file is never modified by these scripts).
+4. Approvals, in order: 15 (network + VNet integration) -> 10 (private server) -> 30 (push images) -> 40 (frontend app, image settings) -> 50 (settings) -> 65 (migration) -> admin password rotation -> 70 (verify).
+
+## Azure Deployment - Images Published, App Services Hardened (24 November 2026)
+
+**Status:** the private PostgreSQL deployment failed again on the same two policy denials (`Microsoft.Network/privateDnsZones`, `privateDnsZones/virtualNetworkLinks`). The owner created both Web Apps (system-assigned identities, AcrPull verified) and re-authenticated the CLI. Everything that does not depend on PostgreSQL or private networking is done. Approved and executed by the owner's decision: **ACR push** and **App Service hardening**. Deferred by the owner: frontend container deployment. No resource was created, no public database access exists, nothing staged or committed.
+
+### Discovery (read-only, `%USERPROFILE%\.azure-onboardai`)
+
+Resource group `<resource-group>` (southindia); plan `<app-service-plan>` (P0v3); backend `<backend-host>.azurewebsites.net`; frontend `<frontend-host>.azurewebsites.net`; both apps use the **sitecontainers** model with a placeholder main container (`appsvc/staticsite`, port 80, anonymous pull); ACR login server `<acr-login-server>`; no PostgreSQL/VNet. Both apps share the plan's outbound IP addresses: an IP-based access restriction on the backend cannot distinguish our frontend from other apps on the same stamp, so the **proxy-key header** (BACKEND_PROXY_SECRET) is the effective frontend-to-backend control (IP restriction = defence in depth).
+
+### Executed (approved)
+
+| Action | Result |
+|---|---|
+| Production images (step 30, build + secret scan) | `onboardai-backend` and `onboardai-frontend`, tag **`78b80ee-202611241823`** (code = 78b80ee + this batch's working tree); index 65 chunks + embedding model + PDF verified at build; secret scan clean (credentials/endpoints); Trivy **0 fixable HIGH/CRITICAL** both images; backend runs as appuser, no SSH server, no DB client, 0 secret-named environment variables baked in |
+| ACR push (`az acr login`, Entra ID) | backend digest `sha256:adbb53ceb9b622225b0823ce0aedb905b8f348b1be66b11c3405ba497711c1e8`, frontend digest `sha256:a26b2cfd5c00307e85d5cc6e677ed3e0132f7cd0a6910327dc964f14c5aa7584`; registry now lists exactly these tags |
+| App Service hardening (step 40 `-HardenOnly`, both apps) | verified: FTPS Disabled, basic-auth publishing off (FTP and SCM), HTTP/2 on, TLS 1.2, HTTPS only, Always On, ARR affinity off, ACR pulls via managed identity, container logging on; identity/AcrPull only checked; images and health checks untouched |
+
+### Script fixes from this round
+
+* `05-Discover-Resources.ps1`: generated `config.psd1` was not a valid data file (PowerShell ',' vs '+' precedence put the header comment and `@{` on one line); fixed; region normalised to lowercase.
+* `Initialize-Deployment`: now **fails closed** when the configuration cannot be parsed (before, a parse error left an empty configuration and produced an empty image tag); per-step `-NotNeeded` keys (steps 30 and 40 `-HardenOnly` do not need the PostgreSQL values) while every other placeholder still blocks `-Execute`.
+* `30-Publish-Images.ps1`: the image secret scan matched role names (`onboardai_app`, `onboardai_reader`) from the secrets file - a false positive (identifiers present in the code by design); the scan now checks credential and endpoint values only. Messages show the real registry and dry-run status.
+* `40-Provision-AppService.ps1`: `-HardenOnly` mode (settings only, creates nothing, no image change).
+* Validator: also checks that every `.psd1` parses; **0 failures**.
+
+### Remaining deployment steps (each needs approval)
+
+| # | Step | Depends on | Estimate |
+|---|---|---|---|
+| 1 | Policy exception for private DNS zones + VNet links | Azure team | external |
+| 2 | `AZURE_PG_ADMIN_PASSWORD` in the secrets file | owner | 2 min |
+| 3 | `15-Provision-Network.ps1 -Execute` (VNet, delegated subnets, private DNS + link, backend VNet integration) | 1 | 5-10 min |
+| 4 | Private PostgreSQL (owner, or `10-Provision-Database.ps1 -Execute`), then `05-Discover-Resources.ps1 -PgServer <name>` | 3 | 10-15 min (server creation) |
+| 5 | `50-Configure-Apps.ps1 -Execute` (app settings incl. private PG_HOST, proxy secret; frontend settings; backend access restriction) | 4 | 5 min |
+| 6 | `65-Migrate-Database-InVNet.ps1 -Execute` (temporary migration image, SSH tunnel, restore, verify, switch back) - if the Entra-authenticated SCM tunnel is refused with basic auth disabled, temporarily allow SCM basic auth for the migration window only (approval) | 5 | 15-20 min |
+| 7 | `40-Provision-AppService.ps1 -Execute` (production images on both apps, health checks /ready and /healthz) | 6 | 10 min (pull + start) |
+| 8 | PostgreSQL admin password rotation; `70-Verify-Deployment.ps1` (16 checks + direct-backend refusal); trusted-proxy-hops check | 7 | 10 min |
+
+**Revised estimate after the policy exception: about 60-75 minutes** of execution, mostly Azure provisioning, image pull and container start-up.
+
+## Deployment Readiness - Fast-Track Checks (24 November 2026)
+
+**Status: deployment preparation COMPLETE; waiting for the private DNS policy exception.** No Azure provisioning, no production container activation, nothing staged or committed.
+
+| Check | Result |
+|---|---|
+| ACR digests vs build records | backend tag `78b80ee-202611241823` -> `sha256:adbb53ceb9b622225b0823ce0aedb905b8f348b1be66b11c3405ba497711c1e8`, frontend -> `sha256:a26b2cfd5c00307e85d5cc6e677ed3e0132f7cd0a6910327dc964f14c5aa7584`: **identical** to the digests recorded at push; the untagged manifests are the platform image and BuildKit attestation of each index |
+| Source consistency | no image input (backend, data, frontend sources, Dockerfiles, nginx files, entrypoint) changed after the respective build: no rebuild needed |
+| SSH tunnel with SCM basic auth disabled | `az webapp create-remote-connection` (CLI 2.91) authenticates with the app's **publishing credentials** (HTTP Basic, `begin_list_publishing_credentials`): it is refused while SCM basic auth is disabled. Browser SSH (Entra) uses the fixed root password, which the key-only sshd rejects by design. Decision: `65 -AllowTemporaryScmBasicAuth` (approval) enables **SCM-only** basic auth for the migration window; cleanup always disables it and regenerates the publishing password. FTP basic auth stays off. Live tunnel test deferred to the migration |
+| Private backend networking | IP restrictions/secret headers are NOT used as isolation: both apps get regional VNet integration in `snet-app` (route-all), `snet-app` gets the `Microsoft.Web` service endpoint, the backend admits **only that subnet** (default deny; SCM site keeps its own Entra-protected access). `50-Configure-Apps.ps1` refuses to run unless this restriction exists and no IP allow rule remains; the proxy-key header stays as an extra layer |
+| Validator | 61 az command lines + conditional commands valid against CLI 2.91; no secrets; no database firewall/public access: **0 failures** |
+
+### Mandatory Azure permissions (policy "Sandbox: Allowed resource types" + RBAC)
+
+* Resource types: `Microsoft.Network/privateDnsZones`, `Microsoft.Network/privateDnsZones/virtualNetworkLinks` (**currently denied - the only known blocker**); `Microsoft.Network/virtualNetworks` (+ subnets, delegations, service endpoints); `Microsoft.DBforPostgreSQL/flexibleServers`; App Service regional VNet integration (`Microsoft.Web/sites/networkConfig` / `virtualNetworkConnections`) - not yet exercised, confirm with the Azure team.
+* RBAC on the resource group: `Microsoft.Network/virtualNetworks/subnets/join/action` (VNet integration, PostgreSQL injection), write on `Microsoft.Web/sites/basicPublishingCredentialsPolicies` (temporary SCM basic auth), `Microsoft.Web/sites/newpassword/action`.
+* Not usable under the current policy: backend private endpoint (needs `privatelink.azurewebsites.net`, a private DNS zone); container instances (not authorised).
+
+### Ordered execution (after the exception; each step needs approval)
+
+```powershell
+$env:AZURE_CONFIG_DIR = "$env:USERPROFILE\.azure-onboardai"
+.\deploy\azure\00-Preflight.ps1 -Execute                                   # ARM validate: policy now allows all types
+.\deploy\azure\15-Provision-Network.ps1 -Execute                           # VNet, subnets, private DNS + link, both apps integrated, backend subnet-only
+.\deploy\azure\10-Provision-Database.ps1 -Execute                          # PRIVATE PostgreSQL 16 (or reuse the owner's server)
+.\deploy\azure\05-Discover-Resources.ps1 -PgServer <server-name>           # refresh config.psd1 (PgHost, PgAdminUser)
+.\deploy\azure\50-Configure-Apps.ps1 -Execute                              # app settings (private PG_HOST, proxy secret); isolation check
+.\deploy\azure\65-Migrate-Database-InVNet.ps1 -Execute -AllowTemporaryScmBasicAuth   # SSH migration; backend back on production image
+.\deploy\azure\40-Provision-AppService.ps1 -Execute                        # production images on both apps + health checks
+az postgres flexible-server update --resource-group <rg> --name <server> --admin-password <new>   # rotate admin password
+$env:VERIFY_PW = '<employee password>'; .\deploy\azure\70-Verify-Deployment.ps1 -BaseUrl https://<frontend-host>.azurewebsites.net -BackendUrl https://<backend-host>.azurewebsites.net -EmployeeEmail <email> -PasswordEnv VERIFY_PW
+```
+
+Rollback: `90-Rollback.ps1 -PreviousTag <tag> -Execute`; migration rollback `65-Migrate-Database-InVNet.ps1 -Execute -Rollback`.
+
+**Revised estimate after the exception: about 60-75 minutes** (PostgreSQL creation 10-15, migration 15-20, image pull/start 10, verification 10).

@@ -46,7 +46,7 @@ jobs:
         run: >
           python -m pytest -q -rs -p no:cacheprovider --junitxml=junit-backend.xml
           --ignore=tests/integration/test_postgres_roles.py --ignore=tests/integration/test_postgres_m4.py
-          --ignore=tests/integration/test_postgres_m5.py
+          --ignore=tests/integration/test_postgres_m5.py --ignore=tests/integration/test_postgres_m6.py
       - name: Fail on unexpected skips
         run: |
           python - <<'PY'
@@ -87,7 +87,8 @@ jobs:
           sleep 2
           export ONBOARDAI_PG_TEST_ADMIN_DSN="postgresql://postgres:${PG_PW}@127.0.0.1:55439/postgres"
           python -m pytest -q -rs -p no:cacheprovider --junitxml=junit-postgres.xml \
-            tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py
+            tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py \
+            tests/integration/test_postgres_m6.py
           python - <<'PY'
           import sys, xml.etree.ElementTree as ET
           suite = ET.parse("junit-postgres.xml").getroot().find("testsuite")

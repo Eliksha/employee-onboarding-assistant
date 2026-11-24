@@ -77,22 +77,38 @@ def test_request_id_resets_after_request(client, caplog):
 
 
 # ---------------------------------------------------------------- failure classes
-def test_database_failure_on_employee_endpoint_is_safe_500_and_logged(client, monkeypatch, caplog):
+def _assert_safe_503(r):
+    """PostgreSQL unreachable / restarting / pool exhausted: generic 503 + Retry-After, no connection details."""
+    assert r.status_code == 503 and r.headers["Retry-After"] == "5"
+    assert r.json() == {"detail": middleware.DATABASE_UNAVAILABLE}
+    assert "Traceback" not in r.text and "Error" not in r.text and FAKE_PW not in r.text
+
+
+def test_database_failure_on_employee_endpoint_is_safe_503_and_logged(client, monkeypatch, caplog):
     def down(*a, **k):
         raise psycopg2.OperationalError(f"connection to server failed (password={FAKE_PW})")
 
     monkeypatch.setattr(employee_db, "get_employee", down)
     with caplog.at_level(logging.INFO, logger="app"):
         r = client.get("/employees/EMP001")
-    _assert_safe_500(r)
+    _assert_safe_503(r)
     assert FAKE_PW not in r.text and "OperationalError" not in r.text
-    err = next(x for x in caplog.records if "unhandled error" in x.getMessage())
-    assert err.exc_info and err.request_id == r.headers["X-Request-ID"]
+    warning = next(x for x in caplog.records if "database unavailable" in x.getMessage())
+    assert warning.request_id == r.headers["X-Request-ID"] and "OperationalError" in warning.getMessage()
+    assert all(FAKE_PW not in x.getMessage() for x in caplog.records)
+
+
+def test_pool_exhaustion_is_a_safe_503(client, monkeypatch):
+    from backend.services.postgres import PoolExhausted
+
+    monkeypatch.setattr(employee_db, "get_employee", lambda *_: (_ for _ in ()).throw(PoolExhausted("busy")))
+    _assert_safe_503(client.get("/employees/EMP001"))
 
 
 def test_database_failure_on_history_and_feedback(client, monkeypatch):
     monkeypatch.setattr(chat_route, "get_employee", lambda *_: (_ for _ in ()).throw(psycopg2.OperationalError("down")))
-    _assert_safe_500(client.get("/history", params={"employee_id": "EMP001"}))
+    _assert_safe_503(client.get("/history", params={"employee_id": "EMP001"}))
+    # Any other database error (here SQLite) stays a generic 500.
     monkeypatch.setattr(db, "get_message_owner", lambda *_: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
     _assert_safe_500(client.post("/feedback", json={"message_id": 1, "rating": "up"}))
 

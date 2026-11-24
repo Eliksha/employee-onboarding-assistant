@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from backend.config import settings
-from backend.services import employee_scope
+from backend.services import db_integrity, employee_scope, hr_queue_schema, postgres
 from backend.services.auth_schema import AUTH_TABLES, SQLITE_DDL
 from backend.services.employee_db import UnknownEmployeeError
 from backend.services.postgres import postgres_connection
@@ -143,31 +143,67 @@ def enforce_role_policy(app_is_superuser: bool, app_bypasses_rls: bool = False) 
     return issues
 
 
+_VERIFIED_CONFIGS: set = set()
+
+
+def _postgres_config_key() -> tuple:
+    """Settings that decide the outcome of the startup checks (no secret values, only their presence/length)."""
+    return (settings.pg_host, settings.pg_port, settings.pg_database, settings.pg_user, settings.pg_reader_user,
+            len(settings.pg_scope_secret), settings.pg_sslmode, settings.pg_sslrootcert, settings.app_env,
+            settings.allow_privileged_db_connection)
+
+
 def init_db() -> None:
     if _postgres():
-        # PostgreSQL schema and seed data are migrated explicitly (never altered implicitly at startup).
-        with _conn() as con:
-            _execute(con, "SELECT 1 FROM employees LIMIT 1", one=True)
-            present = _execute(con, """SELECT table_name FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_name IN ('user_accounts', 'user_sessions')""", all_rows=True)
-            role = _execute(con, "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
-                            one=True)
-            integrity = _execute(con, """SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
-                AND table_name = 'escalations' AND column_name = 'employee_id'""", one=True)
-        if len(present) != len(AUTH_TABLES):
-            raise RuntimeError(
-                "Authentication tables are missing in PostgreSQL. Run: python backend/migrations/004_auth_tables.py "
-                "(with PYTHONPATH set to the project root)."
-            )
-        if integrity is None:
-            raise RuntimeError(
-                "Data-integrity migration 007 has not been applied to PostgreSQL. Run: "
-                "python backend/migrations/007_data_integrity.py --apply (see docs/runbook.md section 11)."
-            )
-        if role is None:  # current_user always has a pg_roles row; anything else is treated as privileged
-            raise RuntimeError("Could not determine the PostgreSQL role attributes of the application connection.")
-        enforce_role_policy(app_is_superuser=bool(role["rolsuper"]), app_bypasses_rls=bool(role["rolbypassrls"]))
+        key = _postgres_config_key()
+        if key in _VERIFIED_CONFIGS:
+            return  # checks already passed for this configuration in this process (migrations need a restart)
+        verify_postgres_startup()
+        _VERIFIED_CONFIGS.add(key)
         return
+    _init_sqlite()
+
+
+def verify_postgres_startup() -> None:
+    """Fail-closed PostgreSQL startup checks (schema is migrated explicitly, never altered implicitly).
+
+    TLS settings, authentication tables, migration 007 (every column, constraint and index), migration 008
+    (HR/IT queue and shared rate-limit objects) and the role policy (no superuser / BYPASSRLS).
+    """
+    postgres.validate_tls_settings()
+    with _conn() as con:
+        _execute(con, "SELECT 1 FROM employees LIMIT 1", one=True)
+        present = _execute(con, """SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name IN ('user_accounts', 'user_sessions')""", all_rows=True)
+        role = _execute(con, "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
+                        one=True)
+        integrity = _execute(con, """SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
+            AND table_name = 'escalations' AND column_name = 'employee_id'""", one=True)
+        integrity_problems = db_integrity.schema_problems(con) if integrity is not None else []
+        missing_008 = hr_queue_schema.missing_objects(con)
+    if len(present) != len(AUTH_TABLES):
+        raise RuntimeError(
+            "Authentication tables are missing in PostgreSQL. Run: python backend/migrations/004_auth_tables.py "
+            "(with PYTHONPATH set to the project root)."
+        )
+    if integrity is None:
+        raise RuntimeError(
+            "Data-integrity migration 007 has not been applied to PostgreSQL. Run: "
+            "python backend/migrations/007_data_integrity.py --apply (see docs/runbook.md section 11)."
+        )
+    if integrity_problems:
+        raise RuntimeError("Data-integrity migration 007 is incomplete (" + "; ".join(integrity_problems) + "). "
+                           "Run: python backend/migrations/007_data_integrity.py --verify, then --apply.")
+    if missing_008:
+        raise RuntimeError("Migration 008 (HR/IT escalation queue, shared login rate limiting) has not been applied "
+                           "(missing: " + ", ".join(missing_008) + "). Run: python backend/migrations/"
+                           "008_hr_escalation_queue.py --apply (see docs/runbook.md section 14).")
+    if role is None:  # current_user always has a pg_roles row; anything else is treated as privileged
+        raise RuntimeError("Could not determine the PostgreSQL role attributes of the application connection.")
+    enforce_role_policy(app_is_superuser=bool(role["rolsuper"]), app_bypasses_rls=bool(role["rolbypassrls"]))
+
+
+def _init_sqlite() -> None:
     with _conn() as c:
         c.executescript("""
             CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT, answer TEXT,
@@ -185,6 +221,11 @@ def init_db() -> None:
             c.execute("ALTER TABLE escalations ADD COLUMN employee_id TEXT REFERENCES employees(employee_id)")
         if "message_id" not in columns:
             c.execute("ALTER TABLE escalations ADD COLUMN message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL")
+        # Migration 008 (HR/IT queue, audit trail, shared login rate limiting): PostgreSQL uses 05_hr_queue.sql / 008.
+        for column, definition in hr_queue_schema.ESCALATION_COLUMNS:
+            if column not in columns:
+                c.execute(f"ALTER TABLE escalations ADD COLUMN {column} {definition}")
+        c.executescript(hr_queue_schema.SQLITE_DDL)
         if c.execute("SELECT COUNT(*) FROM checklist").fetchone()[0] == 0:
             seed = Path(settings.raw_dir) / "checklist.json"
             if seed.exists():
@@ -254,12 +295,17 @@ def add_feedback(message_id: int, rating: str, comment: Optional[str]) -> int:
 
 
 def add_escalation(question: str, contact_pref: Optional[str], employee_id: Optional[str] = None,
-                   message_id: Optional[int] = None) -> int:
-    """Record an HR/IT escalation, attributed to the session employee (None for admin accounts)."""
+                   message_id: Optional[int] = None, actor_user_id: Optional[int] = None) -> int:
+    """Put an escalation in the HR/IT queue, attributed to the session employee (None for admin accounts).
+
+    The queue entry and its 'created' audit event are written in one transaction.
+    """
     init_db()
     with _conn() as c:
-        return _insert_id(c, """INSERT INTO escalations(question, contact_pref, status, created_at, employee_id, message_id)
-            VALUES (?,?,?,?,?,?)""", (question, contact_pref, "open", _now(), employee_id, message_id))
+        escalation_id = _insert_id(c, """INSERT INTO escalations(question, contact_pref, status, created_at, employee_id,
+            message_id) VALUES (?,?,?,?,?,?)""", (question, contact_pref, "open", _now(), employee_id, message_id))
+        _add_event(c, escalation_id, actor_user_id, "created", None, "open")
+        return escalation_id
 
 
 def find_escalation(message_id: int) -> Optional[int]:
@@ -290,6 +336,92 @@ def recent_employee_messages(employee_id: str, limit: int = 20) -> List[Dict]:
         # Latest rating and escalation state per message (optional fields; the chat UI shows them).
         rows = _execute(c, """SELECT m.*,
             (SELECT f.rating FROM feedback f WHERE f.message_id = m.id ORDER BY f.id DESC LIMIT 1) AS feedback,
-            EXISTS (SELECT 1 FROM escalations e WHERE e.message_id = m.id) AS escalated
+            EXISTS (SELECT 1 FROM escalations e WHERE e.message_id = m.id) AS escalated,
+            (SELECT e.status FROM escalations e WHERE e.message_id = m.id ORDER BY e.id LIMIT 1) AS escalation_status
             FROM messages m WHERE m.employee_id = ? ORDER BY m.id DESC LIMIT ?""", (employee_id, limit), all_rows=True)
     return [_message_dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------- HR/IT escalation queue (migration 008)
+class EscalationNotFound(LookupError):
+    pass
+
+
+class InvalidTransition(ValueError):
+    pass
+
+
+# Fields HR/IT staff see: the escalated question, who raised it (employee ID and name only), the escalated answer
+# (only that one message, never the employee's wider chat history), status and handling. No feedback comments,
+# no records data, no account details.
+_QUEUE_SELECT = """SELECT e.id, e.question, e.contact_pref, e.status, e.created_at, e.updated_at, e.resolution_note,
+    e.employee_id, emp.name AS employee_name, e.message_id, m.answer AS escalated_answer, m.sources AS answer_sources,
+    ua.email AS handled_by
+    FROM escalations e
+    LEFT JOIN employees emp ON emp.employee_id = e.employee_id
+    LEFT JOIN messages m ON m.id = e.message_id
+    LEFT JOIN user_accounts ua ON ua.id = e.handled_by"""
+
+
+def _escalation_dict(row) -> Dict:
+    result = dict(row)
+    sources = result.pop("answer_sources", None)
+    result["answer_sources"] = json.loads(sources) if isinstance(sources, str) and sources else (sources or [])
+    return result
+
+
+def _add_event(c, escalation_id: int, actor_user_id: Optional[int], action: str,
+               from_status: Optional[str] = None, to_status: Optional[str] = None, note: Optional[str] = None) -> None:
+    _insert_id(c, """INSERT INTO escalation_events(escalation_id, actor_user_id, action, from_status, to_status, note,
+        created_at) VALUES (?,?,?,?,?,?,?)""", (escalation_id, actor_user_id, action, from_status, to_status, note, _now()))
+
+
+def list_escalations(status: Optional[str] = None, limit: int = 100) -> List[Dict]:
+    """HR/IT queue: newest first, optionally filtered by status."""
+    limit = max(1, min(int(limit), 200))
+    with _conn() as c:
+        if status:
+            rows = _execute(c, _QUEUE_SELECT + " WHERE e.status = ? ORDER BY e.id DESC LIMIT ?", (status, limit),
+                            all_rows=True)
+        else:
+            rows = _execute(c, _QUEUE_SELECT + " ORDER BY e.id DESC LIMIT ?", (limit,), all_rows=True)
+    return [_escalation_dict(r) for r in rows]
+
+
+def get_escalation(escalation_id: int, viewer_user_id: Optional[int] = None) -> Dict:
+    """One escalation with its audit trail; records a 'viewed' event for the viewer (access audit)."""
+    with _conn() as c:
+        row = _execute(c, _QUEUE_SELECT + " WHERE e.id = ?", (escalation_id,), one=True)
+        if row is None:
+            raise EscalationNotFound(escalation_id)
+        if viewer_user_id is not None:
+            _add_event(c, escalation_id, viewer_user_id, "viewed")
+        events = _execute(c, """SELECT ev.id, ev.action, ev.from_status, ev.to_status, ev.note, ev.created_at,
+            ua.email AS actor FROM escalation_events ev LEFT JOIN user_accounts ua ON ua.id = ev.actor_user_id
+            WHERE ev.escalation_id = ? ORDER BY ev.id""", (escalation_id,), all_rows=True)
+    result = _escalation_dict(row)
+    result["events"] = [dict(e) for e in events]
+    return result
+
+
+def update_escalation_status(escalation_id: int, to_status: str, actor_user_id: int,
+                             note: Optional[str] = None) -> Dict:
+    """Move an escalation along the workflow (hr_queue_schema.ESCALATION_TRANSITIONS); audited in one transaction."""
+    if to_status not in hr_queue_schema.ESCALATION_TRANSITIONS:
+        raise InvalidTransition(f"Unknown status: {to_status}")
+    note = (note or "").strip() or None
+    with _conn() as c:
+        row = _execute(c, "SELECT status FROM escalations WHERE id = ?", (escalation_id,), one=True)
+        if row is None:
+            raise EscalationNotFound(escalation_id)
+        current = row["status"] or "open"
+        if to_status not in hr_queue_schema.ESCALATION_TRANSITIONS.get(current, ()):
+            raise InvalidTransition(f"Cannot change status from {current} to {to_status}")
+        # Optimistic check on the current status: a concurrent change makes this update affect no row.
+        changed = _execute(c, """UPDATE escalations SET status = ?, updated_at = ?, handled_by = ?,
+            resolution_note = COALESCE(?, resolution_note) WHERE id = ? AND status = ?""",
+                           (to_status, _now(), actor_user_id, note, escalation_id, current))
+        if changed != 1:
+            raise InvalidTransition("The escalation was changed by someone else; reload and try again")
+        _add_event(c, escalation_id, actor_user_id, "status_changed", current, to_status, note)
+    return get_escalation(escalation_id)

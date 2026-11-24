@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "OnboardAI preflight: VALIDATE ONLY (az deployment group validate). Evaluates Azure Policy and quotas for every resource type the deployment needs. Never deploy this template."
+  },
+  "parameters": {
+    "location": { "type": "string" },
+    "suffix": { "type": "string" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-12-01",
+      "name": "[concat('onboardai-preflight-plan-', parameters('suffix'))]",
+      "location": "[parameters('location')]",
+      "kind": "linux",
+      "sku": { "name": "P0v3", "tier": "Premium0V3" },
+      "properties": { "reserved": true }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-12-01",
+      "name": "[concat('onboardai-preflight-site-', parameters('suffix'))]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux,container",
+      "dependsOn": [ "[resourceId('Microsoft.Web/serverfarms', concat('onboardai-preflight-plan-', parameters('suffix')))]" ],
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', concat('onboardai-preflight-plan-', parameters('suffix')))]",
+        "httpsOnly": true,
+        "siteConfig": { "linuxFxVersion": "DOCKER|mcr.microsoft.com/appsvc/staticsite:latest", "minTlsVersion": "1.2" }
+      }
+    },
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[concat('onboardaipreflight', parameters('suffix'))]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Basic" },
+      "properties": { "adminUserEnabled": false }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2024-08-01",
+      "name": "[concat('onboardai-preflight-pg-', parameters('suffix'))]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Standard_B1ms", "tier": "Burstable" },
+      "properties": {
+        "version": "16",
+        "administratorLogin": "preflightadmin",
+        "administratorLoginPassword": "[concat('Pf!', uniqueString(resourceGroup().id, parameters('suffix')), 'x9Q')]",
+        "storage": { "storageSizeGB": 32 },
+        "backup": { "backupRetentionDays": 7, "geoRedundantBackup": "Disabled" },
+        "highAvailability": { "mode": "Disabled" }
+      }
+    }
+  ]
+}

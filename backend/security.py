@@ -19,12 +19,28 @@ FORBIDDEN_NO_WORKSPACE = "This account is not linked to an employee workspace."
 FORBIDDEN_ADMIN_ONLY = "Administrator role required."
 
 
+def _strip_port(value: str) -> str:
+    """'203.0.113.7:51234' -> '203.0.113.7', '[2001:db8::1]:443' -> '2001:db8::1'; bare IPv6 is kept as is."""
+    value = value.strip()
+    if value.startswith("["):
+        return value[1:value.index("]")] if "]" in value else value.strip("[]")
+    if value.count(":") == 1:
+        return value.split(":", 1)[0]
+    return value
+
+
 def client_ip(request: Request) -> str:
-    """Client address; X-Forwarded-For is honoured only behind a trusted proxy (last hop added by it)."""
+    """Client address. X-Forwarded-For is honoured only behind trusted proxies (TRUST_PROXY_HEADERS).
+
+    Each of TRUSTED_PROXY_HOPS proxies appends one entry, so the client is the entry that many positions from
+    the right; anything further left was supplied by the client and is ignored. Ports (as added by Azure App
+    Service) are removed.
+    """
     if settings.trust_proxy_headers:
-        forwarded = request.headers.get("x-forwarded-for", "")
-        if forwarded.strip():
-            return forwarded.split(",")[-1].strip()
+        parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+        if parts:
+            hops = max(1, int(settings.trusted_proxy_hops))
+            return _strip_port(parts[-hops] if len(parts) >= hops else parts[0])
     return request.client.host if request.client else "unknown"
 
 
@@ -61,6 +77,22 @@ def csrf_protected(request: Request, ctx: auth.SessionContext = Depends(current_
         if not supplied or not hmac.compare_digest(supplied.encode(), ctx.csrf_token.encode()):
             raise HTTPException(status_code=403, detail=CSRF_FAILED)
     return ctx.user
+
+
+FORBIDDEN_HR_ONLY = "HR/IT support role required."
+
+
+def require_hr(user: auth.AuthUser = Depends(current_user)) -> auth.AuthUser:
+    """HR/IT support staff only (escalation queue). Administrators and employees are refused."""
+    if user.role != "hr":
+        raise HTTPException(status_code=403, detail=FORBIDDEN_HR_ONLY)
+    return user
+
+
+def require_hr_write(user: auth.AuthUser = Depends(csrf_protected)) -> auth.AuthUser:
+    if user.role != "hr":
+        raise HTTPException(status_code=403, detail=FORBIDDEN_HR_ONLY)
+    return user
 
 
 def require_admin(user: auth.AuthUser = Depends(current_user)) -> auth.AuthUser:

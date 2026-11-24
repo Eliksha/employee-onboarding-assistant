@@ -21,7 +21,7 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 from backend.config import settings
 from backend.services import db
 
-ROLES = ("employee", "admin")
+ROLES = ("employee", "admin", "hr")   # hr = HR/IT support staff (escalation queue), not linked to an employee
 MAX_PASSWORD_LENGTH = 1024
 TOUCH_INTERVAL_SECONDS = 60
 
@@ -201,7 +201,11 @@ def delete_session(token_hash: str) -> None:
 
 # ---------------------------------------------------------------- login rate limiting
 class LoginRateLimiter:
-    """Sliding-window counter of failed logins per email and per client IP (in-process)."""
+    """Sliding-window counter of failed logins per email and per client IP (in-process, bounded).
+
+    Used for SQLite/local runs. At most LOGIN_RATE_LIMIT_MAX_KEYS keys are tracked: expired windows are pruned
+    first, then the keys with the oldest last failure are dropped, so memory stays bounded under key spraying.
+    """
 
     def __init__(self):
         self._failures: Dict[str, Deque[float]] = {}
@@ -213,6 +217,18 @@ class LoginRateLimiter:
             window.popleft()
         return window
 
+    def _bound(self, now: float) -> None:
+        limit = max(100, int(settings.login_rate_limit_max_keys))
+        if len(self._failures) <= limit:
+            return
+        cutoff = now - settings.login_window_seconds
+        for key in [k for k, w in self._failures.items() if not w or w[-1] <= cutoff]:
+            del self._failures[key]
+        overflow = len(self._failures) - limit
+        if overflow > 0:
+            for key in sorted(self._failures, key=lambda k: self._failures[k][-1])[:overflow]:
+                del self._failures[key]
+
     def retry_after(self, email: str, ip: str) -> int:
         """Seconds until another attempt is allowed (0 = allowed now)."""
         now = time.time()
@@ -223,6 +239,8 @@ class LoginRateLimiter:
                 window = self._prune(key, now)
                 if len(window) >= limit:
                     waits.append(int(window[0] + settings.login_window_seconds - now) + 1)
+                elif not window:
+                    self._failures.pop(key, None)
         return max(waits, default=0)
 
     def record_failure(self, email: str, ip: str) -> None:
@@ -230,6 +248,7 @@ class LoginRateLimiter:
         with self._lock:
             for key in (f"email:{email}", f"ip:{ip}"):
                 self._prune(key, now).append(now)
+            self._bound(now)
 
     def reset_email(self, email: str) -> None:
         with self._lock:
@@ -239,5 +258,77 @@ class LoginRateLimiter:
         with self._lock:
             self._failures.clear()
 
+    def tracked_keys(self) -> int:
+        with self._lock:
+            return len(self._failures)
 
-login_limiter = LoginRateLimiter()
+
+class DatabaseLoginRateLimiter:
+    """The same sliding window, stored in the shared `login_failures` table (migration 008).
+
+    Every worker process and every App Service instance sees the same counters, so scaling out does not
+    multiply the allowed attempts. Keys are stored only as SHA-256 hashes (no email address or IP in the
+    table); rows older than the window are deleted on every recorded failure, so the table stays bounded.
+    """
+
+    @staticmethod
+    def _hash(key: str) -> str:
+        return hashlib.sha256(("onboardai-login-v1:" + key).encode("utf-8")).hexdigest()
+
+    def retry_after(self, email: str, ip: str) -> int:
+        now = time.time()
+        since = now - settings.login_window_seconds
+        waits = []
+        with db._conn() as con:
+            for key, limit in ((f"email:{email}", settings.login_max_failures_per_email),
+                               (f"ip:{ip}", settings.login_max_failures_per_ip)):
+                row = db._execute(con, """SELECT COUNT(*) AS n, MIN(failed_at) AS first_failure FROM login_failures
+                    WHERE key_hash = ? AND failed_at > ?""", (self._hash(key), since), one=True)
+                if row is not None and int(row["n"]) >= limit:
+                    waits.append(int(float(row["first_failure"]) + settings.login_window_seconds - now) + 1)
+        return max(waits, default=0)
+
+    def record_failure(self, email: str, ip: str) -> None:
+        now = time.time()
+        with db._conn() as con:
+            db._execute(con, "DELETE FROM login_failures WHERE failed_at <= ?", (now - settings.login_window_seconds,))
+            for key in (f"email:{email}", f"ip:{ip}"):
+                db._execute(con, "INSERT INTO login_failures(key_hash, failed_at) VALUES (?, ?)", (self._hash(key), now))
+
+    def reset_email(self, email: str) -> None:
+        with db._conn() as con:
+            db._execute(con, "DELETE FROM login_failures WHERE key_hash = ?", (self._hash(f"email:{email}"),))
+
+    def clear(self) -> None:
+        with db._conn() as con:
+            db._execute(con, "DELETE FROM login_failures WHERE failed_at >= ?", (0,))
+
+
+class LoginLimiter:
+    """Chooses the limiter per call: LOGIN_RATE_LIMIT_BACKEND = auto (database on PostgreSQL) | memory | database."""
+
+    def __init__(self):
+        self.memory = LoginRateLimiter()
+        self.database = DatabaseLoginRateLimiter()
+
+    def active(self):
+        mode = settings.login_rate_limit_backend.strip().lower()
+        if mode == "database" or (mode == "auto" and settings.db_backend.strip().lower() == "postgresql"):
+            return self.database
+        return self.memory
+
+    def retry_after(self, email: str, ip: str) -> int:
+        return self.active().retry_after(email, ip)
+
+    def record_failure(self, email: str, ip: str) -> None:
+        self.active().record_failure(email, ip)
+
+    def reset_email(self, email: str) -> None:
+        self.active().reset_email(email)
+
+    def clear(self) -> None:
+        """Clears the in-process counters (tests). The shared table is cleared only via `database.clear()`."""
+        self.memory.clear()
+
+
+login_limiter = LoginLimiter()

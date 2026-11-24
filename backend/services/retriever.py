@@ -49,6 +49,15 @@ def _ensure_loaded() -> None:
         logger.info("FAISS index version %s loaded (%d chunks)", version, len(chunks))
 
 
+def ensure_loaded() -> None:
+    """Load the active index if needed (readiness probe); raises ingest.IndexUnavailable when none is valid."""
+    _ensure_loaded()
+
+
+def chunk_count() -> int:
+    return len(_state["chunks"])
+
+
 def search(query: str, k: int = None) -> List[Dict]:
     _ensure_loaded()
     index, chunks = _state["index"], _state["chunks"]

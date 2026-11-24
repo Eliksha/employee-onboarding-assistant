@@ -9,8 +9,10 @@ from backend.config import ROOT
 from backend.services import db_roles
 
 SCHEMA_SQL = ((ROOT / "docker" / "postgres" / "01_schema.sql").read_text(encoding="utf-8")
-              + (ROOT / "docker" / "postgres" / "03_auth_schema.sql").read_text(encoding="utf-8"))
-SENSITIVE_TABLES = {"user_accounts", "user_sessions", "messages", "feedback", "escalations"}
+              + (ROOT / "docker" / "postgres" / "03_auth_schema.sql").read_text(encoding="utf-8")
+              + (ROOT / "docker" / "postgres" / "05_hr_queue.sql").read_text(encoding="utf-8"))
+SENSITIVE_TABLES = {"user_accounts", "user_sessions", "messages", "feedback", "escalations", "escalation_events",
+                    "login_failures"}
 # SQLite-only bootstrap statements in db.init_db (never run on PostgreSQL).
 SQLITE_ONLY = {("INSERT", "checklist")}
 
@@ -69,7 +71,7 @@ def test_app_role_has_no_destructive_privileges():
         names = {p for p, _ in privileges}
         assert names <= {"SELECT", "INSERT", "UPDATE", "DELETE"}, table
         if "DELETE" in names:
-            assert table == "user_sessions"
+            assert table in ("user_sessions", "login_failures")   # expired sessions and rate-limit rows only
         assert ("UPDATE", None) not in privileges, f"UPDATE on {table} must be column-scoped"
     assert "SUPERUSER" not in db_roles.ROLE_ATTRIBUTES.replace("NOSUPERUSER", "")
     for flag in ("NOSUPERUSER", "NOCREATEDB", "NOCREATEROLE", "NOREPLICATION", "NOBYPASSRLS"):

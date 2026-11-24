@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 
 from backend import middleware
 from backend.logging_config import setup_logging
-from backend.routes import admin, auth, chat, checklist, employees, feedback
+from backend.routes import admin, auth, chat, checklist, employees, feedback, hr
 from backend.services import db
 
 
@@ -14,6 +14,9 @@ async def lifespan(app: FastAPI):
     setup_logging()
     db.init_db()
     yield
+    from backend.services import postgres
+
+    postgres.close_all_pools()
 
 
 def docs_enabled() -> bool:
@@ -36,6 +39,7 @@ app.include_router(chat.router)
 app.include_router(checklist.router)
 app.include_router(feedback.router)
 app.include_router(admin.router)
+app.include_router(hr.router)
 app.include_router(employees.router)
 
 
@@ -53,3 +57,18 @@ def health():
         content={"status": "unavailable", "database": "unavailable", "detail": DATABASE_UNAVAILABLE},
         headers=headers,
     )
+
+
+@app.get("/ready")
+def ready():
+    """Readiness: database, schema/migrations, FAISS index, embedding model and required configuration.
+
+    200 only when every component is ok; 503 otherwise. Component names and ok/unavailable only.
+    """
+    from backend.services import readiness
+
+    checks = readiness.check()
+    ok = all(value == "ok" for value in checks.values())
+    return JSONResponse(status_code=200 if ok else 503, content={"status": "ready" if ok else "not_ready",
+                                                                 "checks": checks},
+                        headers={"Cache-Control": "no-store"})

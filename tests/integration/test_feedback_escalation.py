@@ -39,11 +39,11 @@ def test_escalating_an_answer_is_attributed_and_idempotent(two_clients, handbook
     c1, _ = two_clients
     mid = _ask(c1)
     r = c1.post("/escalate", json={"question": "What is the leave policy?", "message_id": mid})
-    assert r.status_code == 200 and r.json()["status"] == "escalated to HR/IT (simulated)"
+    assert r.status_code == 200 and r.json()["status"] == "sent to the HR/IT support queue"
     row = _escalation(r.json()["id"])
     assert (row["employee_id"], row["message_id"], row["status"]) == ("EMP001", mid, "open")
     again = c1.post("/escalate", json={"question": "What is the leave policy?", "message_id": mid})
-    assert again.status_code == 200 and again.json() == {"status": "already escalated to HR/IT (simulated)",
+    assert again.status_code == 200 and again.json() == {"status": "already in the HR/IT support queue",
                                                          "id": r.json()["id"]}
     with db._conn() as c:
         assert db._execute(c, "SELECT COUNT(*) AS n FROM escalations", one=True)["n"] == 1

@@ -114,6 +114,23 @@ def build_plan(conn) -> Plan:
     return plan
 
 
+def schema_problems(conn) -> List[str]:
+    """Missing 007 columns, constraints and indexes (catalog only; cheap enough for every startup)."""
+    problems: List[str] = []
+    for table, column, _ in COLUMNS:
+        if not _column_exists(conn, table, column):
+            problems.append(f"missing column {table}.{column}")
+    if not _not_null(conn, "feedback", "message_id"):
+        problems.append("feedback.message_id is nullable")
+    for name in CONSTRAINTS:
+        if not _constraint_exists(conn, name):
+            problems.append(f"missing constraint {name}")
+    for name in INDEXES:
+        if not _index_exists(conn, name):
+            problems.append(f"missing index {name}")
+    return problems
+
+
 def verify(conn) -> Dict[str, object]:
     """Read-only report of the integrity state."""
     problems: List[str] = []

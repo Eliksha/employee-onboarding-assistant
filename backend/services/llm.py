@@ -92,7 +92,8 @@ def build_input(question: str, passages: List[Dict]) -> str:
     context = "\n\n".join(
         f"[{i}] ({p['source']} - {p['section']})\n{sanitize_passage(p['text'])}" for i, p in enumerate(passages, 1)
     )
-    return f"<untrusted_context>\n{context}\n</untrusted_context>\n\nQuestion: {question}"
+    # The question cannot open, close or forge the context wrapper either (delimiter manipulation).
+    return f"<untrusted_context>\n{context}\n</untrusted_context>\n\nQuestion: {sanitize_passage(question)}"
 
 
 def generate_answer(question: str, passages: List[Dict]) -> str:

@@ -1,4 +1,5 @@
 """Middleware: request IDs, request logging, and friendly error responses."""
+import hmac
 import logging
 import time
 import uuid
@@ -61,9 +62,56 @@ async def query_timeout_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=503, content={"detail": DATABASE_TIMEOUT}, headers={"Retry-After": "5"})
 
 
+DATABASE_UNAVAILABLE = "The database is temporarily unavailable. Please try again shortly."
+
+
+async def database_unavailable_handler(request: Request, exc: Exception):
+    # Connection refused/reset, database restarting, pool exhausted: 503 without connection details.
+    logger.warning("request_id=%s database unavailable on %s %s (%s)", getattr(request.state, "request_id", "-"),
+                   request.method, request.url.path, type(exc).__name__)
+    return JSONResponse(status_code=503, content={"detail": DATABASE_UNAVAILABLE}, headers={"Retry-After": "5"})
+
+
+PROXY_KEY_HEADER = "x-onboardai-proxy-key"
+PROXY_EXEMPT_PATHS = frozenset({"/health", "/ready"})
+PROXY_KEY_REQUIRED = "Not found"
+
+
+class ProxyKeyMiddleware:
+    """When BACKEND_PROXY_SECRET is set, only requests forwarded by the frontend proxy (which adds the
+    X-OnboardAI-Proxy-Key header) reach the API; direct calls get 404. Health and readiness stay open for the
+    platform's probes. Pure ASGI so it runs before routing and adds no overhead when the secret is unset."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        from backend.config import settings
+
+        secret = settings.backend_proxy_secret
+        if scope["type"] == "http" and secret and scope.get("path", "") not in PROXY_EXEMPT_PATHS:
+            supplied = b""
+            for name, value in scope.get("headers", []):
+                if name == PROXY_KEY_HEADER.encode():
+                    supplied = value
+                    break
+            if not hmac.compare_digest(supplied, secret.encode("utf-8")):
+                response = JSONResponse(status_code=404, content={"detail": PROXY_KEY_REQUIRED})
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def install(app: FastAPI) -> None:
+    import psycopg2
+
+    from backend.services.postgres import PoolExhausted
     from backend.services.readonly_query import QueryTimeoutError
 
-    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(ProxyKeyMiddleware)          # inner: runs after request logging (rejections are logged)
+    app.add_middleware(RequestLoggingMiddleware)    # outermost
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(QueryTimeoutError, query_timeout_handler)
+    app.add_exception_handler(PoolExhausted, database_unavailable_handler)
+    app.add_exception_handler(psycopg2.OperationalError, database_unavailable_handler)
+    app.add_exception_handler(psycopg2.InterfaceError, database_unavailable_handler)

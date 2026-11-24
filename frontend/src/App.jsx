@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LayoutDashboard, Bot, ClipboardCheck, CalendarDays, Laptop, Headset, Sparkles, Menu, X, Send, RefreshCw, ArrowRight, UserRound, ShieldCheck, LogOut, LoaderCircle, ThumbsUp, ThumbsDown, LifeBuoy } from 'lucide-react';
-import { authApi, employeeApi, feedbackApi, setCsrfToken, setUnauthorizedHandler } from './api';
+import { authApi, employeeApi, feedbackApi, hrApi, setCsrfToken, setUnauthorizedHandler } from './api';
 import { SESSION_EXPIRED_NOTICE, SIGNED_OUT_NOTICE } from './auth';
 import LoginPage from './LoginPage';
-import { CHAT_MAX_LENGTH, answerActions, escalationPayload, formatSources } from './format';
+import { CHAT_MAX_LENGTH, answerActions, escalationPayload, escalationStatusLabel, formatSources, nextStatuses } from './format';
 import './App.css';
 
 const NAV = [
@@ -42,7 +42,7 @@ function AnswerActions({ message }) {
   };
   const escalate = async () => {
     setPending('escalate'); setNote('');
-    try { const r = await feedbackApi.escalate(escalationPayload(message)); setLocal((s) => ({ ...s, escalated: true })); setNote(`Escalated to HR/IT (reference #${r.data?.id}).`); }
+    try { const r = await feedbackApi.escalate(escalationPayload(message)); setLocal((s) => ({ ...s, escalated: true })); setNote(`Sent to the HR/IT support queue (reference #${r.data?.id}).`); }
     catch (err) { setNote(err.response?.data?.detail ?? 'Could not escalate this answer.'); }
     finally { setPending(''); }
   };
@@ -50,6 +50,7 @@ function AnswerActions({ message }) {
     <button type="button" className={rating === 'up' ? 'selected' : ''} aria-pressed={rating === 'up'} aria-label="Helpful" title="Helpful" disabled={!!pending} onClick={() => rate('up')}><ThumbsUp size={14}/></button>
     <button type="button" className={rating === 'down' ? 'selected' : ''} aria-pressed={rating === 'down'} aria-label="Not helpful" title="Not helpful" disabled={!!pending} onClick={() => rate('down')}><ThumbsDown size={14}/></button>
     <button type="button" className="escalate" disabled={!!pending || escalated} onClick={escalate}><LifeBuoy size={14}/>{escalated ? 'Escalated to HR/IT' : 'Escalate to HR/IT'}</button>
+    {escalated && message.escalation_status && !note && <span className="answer-note" role="status">HR/IT status: {escalationStatusLabel(message.escalation_status)}</span>}
     {note && <span className="answer-note" role="status">{note}</span>}
   </div>;
 }
@@ -301,6 +302,59 @@ function AdminHome({ user, onSignOut, signingOut }) {
   </div>;
 }
 
+// HR/IT support staff (role "hr"): the escalation queue. Each opened escalation is recorded in its audit trail.
+const STATUS_FILTERS = [['', 'All'], ['open', 'Open'], ['in_progress', 'In progress'], ['resolved', 'Resolved'], ['closed', 'Closed']];
+
+function HrQueue({ user, onSignOut, signingOut }) {
+  const [filter, setFilter] = useState('open');
+  const [queue, setQueue] = useState({ items: [], transitions: {} });
+  const [selected, setSelected] = useState(null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    hrApi.list(filter).then(({ data }) => { setError(''); setQueue({ items: data.items ?? [], transitions: data.transitions ?? {} }); })
+      .catch((err) => setError(err.response?.data?.detail ?? 'Could not load the escalation queue.'));
+  }, [filter]);
+  useEffect(() => { load(); }, [load]);
+
+  const open = (id) => {
+    setError(''); setNote('');
+    hrApi.get(id).then(({ data }) => setSelected(data)).catch((err) => setError(err.response?.data?.detail ?? 'Could not open the escalation.'));
+  };
+  const change = async (status) => {
+    setBusy(true); setError('');
+    try { const { data } = await hrApi.update(selected.id, status, note.trim()); setSelected(data); setNote(''); load(); }
+    catch (err) { setError(err.response?.data?.detail ?? 'Could not update the escalation.'); }
+    finally { setBusy(false); }
+  };
+
+  return <div className="admin-shell">
+    <header className="topbar"><div className="brand"><div className="brand-icon"><Sparkles size={23}/></div><div><strong>OnboardAI</strong><small>HR/IT SUPPORT</small></div></div><div className="topbar-right"><span className="environment">{user.email}</span><SignOutButton onSignOut={onSignOut} signingOut={signingOut}/></div></header>
+    <main className="content">
+      <section className="panel"><div className="panel-heading"><div><h2>Escalation queue</h2><p>Questions employees escalated from the AI Assistant. Only the escalated question and answer are shown.</p></div>
+        <label className="queue-filter">Status <select value={filter} onChange={(e) => { setFilter(e.target.value); setSelected(null); }}>{STATUS_FILTERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
+        {error && <p className="error" role="alert">{error}</p>}
+        {queue.items.length === 0 ? <p className="muted">No escalations{filter ? ` with status "${escalationStatusLabel(filter)}"` : ''}.</p>
+          : <div className="table-scroll"><table><thead><tr><th>#</th><th>Employee</th><th>Question</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
+            {queue.items.map((item) => <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : ''}><td>{item.id}</td><td>{item.employee_name ?? '—'}{item.employee_id ? ` (${item.employee_id})` : ''}</td><td>{item.question}</td><td><span className="pill">{escalationStatusLabel(item.status)}</span></td><td>{item.created_at}</td><td><button type="button" className="subtle-button" onClick={() => open(item.id)}>Open</button></td></tr>)}
+          </tbody></table></div>}
+      </section>
+      {selected && <section className="panel" aria-label={`Escalation ${selected.id}`}>
+        <div className="panel-heading"><div><h2>Escalation #{selected.id}</h2><p>{selected.employee_name ?? 'Unknown employee'}{selected.contact_pref ? ` · prefers ${selected.contact_pref}` : ''}</p></div><span className="pill">{escalationStatusLabel(selected.status)}</span></div>
+        <div className="detail-grid"><div><small>Question</small><strong>{selected.question}</strong></div><div><small>Assistant answer</small><strong>{selected.escalated_answer ?? '—'}</strong></div><div><small>Latest note</small><strong>{selected.resolution_note ?? '—'}</strong></div></div>
+        {nextStatuses(selected.status, queue.transitions).length > 0 && <div className="queue-actions">
+          <textarea maxLength={1000} placeholder="Note for the record (optional)" value={note} onChange={(e) => setNote(e.target.value)}/>
+          <div>{nextStatuses(selected.status, queue.transitions).map((status) => <button key={status} type="button" className="support-submit" disabled={busy} onClick={() => change(status)}>Mark {escalationStatusLabel(status).toLowerCase()}</button>)}</div>
+        </div>}
+        <h3 className="section-title">Audit trail</h3>
+        <ul className="audit-trail">{(selected.events ?? []).map((ev) => <li key={ev.id}><span>{ev.created_at}</span> {ev.actor ?? 'system'}: {ev.action === 'status_changed' ? `${escalationStatusLabel(ev.from_status)} → ${escalationStatusLabel(ev.to_status)}` : ev.action}{ev.note ? ` — ${ev.note}` : ''}</li>)}</ul>
+      </section>}
+    </main>
+  </div>;
+}
+
 function App() {
   const [auth, setAuth] = useState({ status: 'checking', user: null, notice: '' });
   const [signingOut, setSigningOut] = useState(false);
@@ -334,6 +388,7 @@ function App() {
 
   if (auth.status === 'checking') return <div className="auth-loading" role="status"><LoaderCircle size={22} className="spin"/> Checking your session...</div>;
   if (auth.status !== 'authenticated') return <LoginPage onSignedIn={signedIn} notice={auth.notice}/>;
+  if (auth.user.role === 'hr') return <HrQueue user={auth.user} onSignOut={signOut} signingOut={signingOut}/>;
   if (!auth.user.employee_id) return <AdminHome user={auth.user} onSignOut={signOut} signingOut={signingOut}/>;
   return <Workspace key={auth.user.email} user={auth.user} onSignOut={signOut} signingOut={signingOut}/>;
 }

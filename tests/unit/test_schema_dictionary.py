@@ -7,7 +7,7 @@ TABLES = sd.tables()
 
 
 def test_every_table_and_column_is_described():
-    assert len(TABLES) == 12
+    assert len(TABLES) == 14   # 12 + escalation_events, login_failures (migration 008)
     for name, table in TABLES.items():
         assert table["description"], name
         assert table["columns"] and all(c["description"] and c["type"] for c in table["columns"].values()), name
@@ -18,7 +18,7 @@ def test_every_table_and_column_is_described():
 
 def test_relationships_point_at_described_tables_and_columns():
     rels = sd.relationships()
-    assert len(rels) == 11
+    assert len(rels) == 14     # + escalations.handled_by, escalation_events -> escalations / user_accounts
     for rel in rels:
         target = TABLES[rel["to_table"]]
         assert set(rel["from_columns"]) <= set(TABLES[rel["from_table"]]["columns"])
@@ -26,14 +26,16 @@ def test_relationships_point_at_described_tables_and_columns():
     assert {(r["from_table"], r["to_table"]) for r in rels} >= {
         ("leave_balances", "employees"), ("assets", "employees"), ("checklist_assignments", "employees"),
         ("checklist_assignments", "checklist"), ("tickets", "employees"), ("user_sessions", "user_accounts"),
-        ("messages", "employees"), ("feedback", "messages"), ("escalations", "employees"), ("escalations", "messages")}
+        ("messages", "employees"), ("feedback", "messages"), ("escalations", "employees"), ("escalations", "messages"),
+        ("escalations", "user_accounts"), ("escalation_events", "escalations"), ("escalation_events", "user_accounts")}
 
 
 def test_security_metadata_matches_the_role_and_import_definitions():
     assert {n for n, t in TABLES.items() if t["row_level_security"]} == set(db_roles.RLS_TABLES)
     assert {n for n, t in TABLES.items() if t["reader_access"]} == set(db_roles.READER_TABLES)
     assert {n for n, t in TABLES.items() if t["sensitive"]} == {"user_accounts", "user_sessions"}
-    assert not any(TABLES[n]["reader_access"] for n in ("user_accounts", "user_sessions", "messages"))
+    assert not any(TABLES[n]["reader_access"] for n in ("user_accounts", "user_sessions", "messages", "escalations",
+                                                        "escalation_events", "login_failures"))
     assert set(db_roles.APP_PRIVILEGES) <= set(TABLES)
     for spec in csv_import.SPECS:
         table = TABLES[spec.table]

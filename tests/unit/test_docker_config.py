@@ -57,3 +57,98 @@ def test_docker_auth_schema_matches_backend_ddl_and_creates_no_accounts():
     assert sql == POSTGRES_DDL
     assert "INSERT" not in sql.upper() and "password_hash text NOT NULL" in sql
     assert 'TRUST_PROXY_HEADERS: "true"' in COMPOSE
+
+
+def test_hr_queue_schema_ships_identically_for_fresh_docker_databases():
+    from backend.services import hr_queue_schema
+
+    sql = (ROOT / "docker" / "postgres" / "05_hr_queue.sql").read_text(encoding="utf-8")
+    assert sql == hr_queue_schema.POSTGRES_DDL
+    assert not re.search(r"(?i)\b(INSERT INTO|DELETE FROM|UPDATE \w+ SET|DROP TABLE|TRUNCATE)\b", sql)   # additive only
+
+
+def test_hr_queue_ddl_splits_into_complete_statements():
+    """Regression: a ';' inside a comment must not produce a statement fragment (found in the migration rehearsal)."""
+    from backend.services import hr_queue_schema
+
+    statements = hr_queue_schema._statements()
+    assert len(statements) == 13   # 4 constraint changes, 3 columns, 2 tables, 4 indexes
+    for statement in statements:
+        assert statement.split()[0] in ("ALTER", "CREATE"), statement[:60]
+        assert "--" not in statement
+
+
+def test_azure_images_bundle_only_approved_assets_and_no_secrets():
+    backend = (ROOT / "deploy" / "azure" / "backend.Dockerfile").read_text(encoding="utf-8")
+    ignore = (ROOT / "deploy" / "azure" / "backend.Dockerfile.dockerignore").read_text(encoding="utf-8").splitlines()
+    assert ignore[next(i for i, line in enumerate(ignore) if not line.startswith("#"))] == "*"   # allow-list
+    for allowed in ("!requirements.txt", "!backend/", "!data/raw/", "!data/index/ACTIVE", "!data/index/versions/"):
+        assert allowed in ignore
+    for denied in ("**/*.db", "**/*.dump", "**/.env", "**/.env.*"):
+        assert denied in ignore
+    assert "COPY data/index/ACTIVE" in backend and "COPY data/index/versions" in backend
+    for setting in ("APP_ENV=production", "PG_SSLMODE=verify-full", "SESSION_COOKIE_SECURE=true", "API_DOCS=false",
+                    "LOGIN_RATE_LIMIT_BACKEND=database", "HF_HUB_OFFLINE=1", "ALLOW_PRIVILEGED_DB_CONNECTION=false"):
+        assert setting in backend
+    assert "USER appuser" in backend and "chmod -R a-w /app/backend /app/data" in backend
+    for text in (backend, (ROOT / "deploy" / "azure" / "frontend.Dockerfile").read_text(encoding="utf-8")):
+        assert not re.search(r"(?i)(api_key|password|secret)\s*=\s*['\"]?[A-Za-z0-9_\-]{8,}", text)
+
+
+def test_azure_nginx_template_keeps_security_headers_and_adds_hsts():
+    template = (ROOT / "deploy" / "azure" / "nginx.conf.template").read_text(encoding="utf-8")
+    local_csp = re.search(r'Content-Security-Policy "([^"]+)"', NGINX).group(1)
+    assert f'Content-Security-Policy "{local_csp}"' in template and "googleapis" not in local_csp
+    assert 'Strict-Transport-Security "max-age=31536000; includeSubDomains"' in template
+    for directive in ("proxy_ssl_verify on;", "proxy_ssl_server_name on;", "X-OnboardAI-Proxy-Key ${BACKEND_PROXY_SECRET}",
+                      "proxy_pass $backend_upstream;", "location = /api/ready", "server_tokens off;"):
+        assert directive in template
+    assert "backend:8000" not in template and "localhost" not in template   # no compose service names / localhost
+
+
+# ---------------------------------------------------------------- temporary migration image (App Service SSH tunnel)
+MIGRATION = ROOT / "deploy" / "azure" / "migration"
+
+
+def test_migration_sshd_is_key_only_non_root_and_without_forwarding():
+    cfg = {line.split()[0].lower(): " ".join(line.split()[1:]) for line in
+           (MIGRATION / "sshd_config").read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")}
+    assert cfg["port"] == "2222" and cfg["permitrootlogin"] == "no" and cfg["allowusers"] == "appuser"
+    assert cfg["authenticationmethods"] == "publickey" and cfg["passwordauthentication"] == "no"
+    assert cfg["kbdinteractiveauthentication"] == "no" and cfg["pubkeyacceptedalgorithms"] == "ssh-ed25519"
+    for option in ("allowtcpforwarding", "allowagentforwarding", "allowstreamlocalforwarding", "x11forwarding",
+                   "permittunnel", "gatewayports", "permituserenvironment"):
+        assert cfg[option] == "no", option
+
+
+def test_migration_entrypoint_requires_one_ed25519_key_and_drops_privileges():
+    entry = (MIGRATION / "migration-entrypoint.sh").read_text(encoding="utf-8")
+    assert r"ssh-ed25519\ *) ;;" in entry and "exactly one public key" in entry
+    assert "rm -f /etc/ssh/ssh_host_*" in entry and "ssh-keygen -q -t ed25519" in entry   # fresh host key per start
+    assert "exec setpriv --reuid=10001 --regid=10001" in entry and "uvicorn" not in entry  # app not started
+    dockerfile = (MIGRATION / "migration.Dockerfile").read_text(encoding="utf-8")
+    assert "usermod -p '*' appuser" in dockerfile and "rm -f /etc/ssh/ssh_host_*" in dockerfile
+    assert not re.search(r"(?i)(chpasswd|Docker!|PermitRootLogin yes)", dockerfile + entry)
+
+
+def test_production_images_contain_no_ssh_server_or_database_client():
+    for name in ("backend.Dockerfile", "frontend.Dockerfile"):
+        text = (ROOT / "deploy" / "azure" / name).read_text(encoding="utf-8")
+        assert "openssh" not in text and "sshd" not in text and "postgresql-client" not in text, name
+
+
+def test_in_vnet_migration_refuses_non_empty_targets_verifies_tls_and_rolls_back():
+    script = (MIGRATION / "in-vnet-migrate.sh").read_text(encoding="utf-8")
+    assert "sslmode=verify-full" in script and "refusing to overwrite existing data" in script
+    assert "trap 'log \"error - rolling back\"; rollback; shred_files' ERR" in script
+    assert "--single-transaction" in script and "ON_ERROR_STOP=1" in script and "shred -u" in script
+    assert 'die "unexpected input key' in script            # only the expected secret names are accepted on stdin
+    assert "rollback empties the target database: pass --confirm" in script
+
+
+def test_azure_scripts_never_open_the_database_to_the_public():
+    for path in (ROOT / "deploy" / "azure").glob("*.ps1"):
+        if path.name == "Test-DeploymentScripts.ps1":
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "'firewall-rule', 'create'" not in text and "'--public-access'" not in text, path.name

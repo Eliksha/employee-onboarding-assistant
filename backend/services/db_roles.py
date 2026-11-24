@@ -4,8 +4,9 @@ Roles
 -----
 * APP role (default `onboardai_app`): what the FastAPI application needs and nothing more - SELECT
   on reference data, INSERT for chat history, feedback, escalations, tickets and accounts, UPDATE on
-  specific columns only, DELETE only on user_sessions. No DDL, no TRUNCATE, not a superuser, cannot
-  create roles or databases, does not bypass row-level security.
+  specific columns only, DELETE only on user_sessions and login_failures (expired rate-limit rows).
+  No DDL, no TRUNCATE, not a superuser, cannot create roles or databases, does not bypass row-level
+  security.
 * READER role (default `onboardai_reader`): SQL-agent / read-only access. SELECT on employee-facing
   data tables only (no auth, chat history, feedback or escalation tables), read-only transactions
   by default, a role-level statement timeout, and row-level security that shows only the rows of
@@ -49,11 +50,17 @@ APP_PRIVILEGES: Dict[str, Tuple[Tuple[str, Optional[Tuple[str, ...]]], ...]] = {
     "tickets": (("SELECT", None), ("INSERT", None)),
     "messages": (("SELECT", None), ("INSERT", None)),
     "feedback": (("SELECT", None), ("INSERT", None)),
-    "escalations": (("SELECT", None), ("INSERT", None)),                    # SELECT for RETURNING id
+    "escalations": (("SELECT", None), ("INSERT", None),                     # SELECT for RETURNING id
+                    ("UPDATE", ("status", "updated_at", "resolution_note", "handled_by"))),   # HR/IT queue
+    "escalation_events": (("SELECT", None), ("INSERT", None)),              # escalation audit trail (008)
+    "login_failures": (("SELECT", None), ("INSERT", None), ("DELETE", None)),  # shared login rate limit (008)
     "user_accounts": (("SELECT", None), ("INSERT", None),
                       ("UPDATE", ("password_hash", "employee_id", "role", "is_active", "updated_at"))),
     "user_sessions": (("SELECT", None), ("INSERT", None), ("UPDATE", ("last_seen_at",)), ("DELETE", None)),
 }
+
+# The only tables the APP role may DELETE from: expired sessions and expired login-failure rows.
+APP_DELETE_TABLES: Tuple[str, ...] = ("user_sessions", "login_failures")
 
 # Identity columns the APP role inserts into (sequence USAGE is granted for these only).
 APP_IDENTITY_COLUMNS: Dict[str, str] = {
@@ -61,6 +68,7 @@ APP_IDENTITY_COLUMNS: Dict[str, str] = {
     "messages": "id",
     "feedback": "id",
     "escalations": "id",
+    "escalation_events": "id",
     "user_accounts": "id",
 }
 
@@ -184,11 +192,15 @@ def preflight(conn, app_role: str, reader_role: str) -> Dict[str, object]:
         raise ProvisioningError(f"{current_user} cannot create roles (needs SUPERUSER or CREATEROLE)")
     if not _value(me_role, "rolsuper", 1) and set(owners.values()) != {current_user}:
         raise ProvisioningError(f"{current_user} must own the application tables (or be a superuser)")
+    # The SECURITY DEFINER scope verifier (owned by current_user) reads the reader session's own
+    # pg_stat_activity.backend_start, which PostgreSQL shows only to superusers, members of pg_read_all_stats
+    # and roles that have the privileges of the session's role. A non-superuser administrator (Azure Database
+    # for PostgreSQL) therefore gets inherited membership in the reader role (see build_plan): narrower than
+    # pg_read_all_stats, which would expose every session's statistics.
     stats = _one(conn, "SELECT pg_has_role(current_user, 'pg_read_all_stats', 'USAGE') AS ok")
-    if not (_value(me_role, "rolsuper", 1) or _value(stats, "ok", 0)):
-        raise ProvisioningError(f"{current_user} must be a superuser or a member of pg_read_all_stats "
-                                "(the scope verifier reads pg_stat_activity.backend_start)")
-    return {"current_user": current_user, "database": database, "table_owners": owners}
+    needs_membership = not (_value(me_role, "rolsuper", 1) or _value(stats, "ok", 0))
+    return {"current_user": current_user, "database": database, "table_owners": owners,
+            "verifier_needs_reader_membership": needs_membership}
 
 
 def _stored_pads(conn):
@@ -231,8 +243,12 @@ def build_plan(
                      sql.SQL("CREATE ROLE {} WITH {} PASSWORD %s").format(_ident(role), attributes),
                      (hashed,), secret=True)
         else:
-            plan.add(f"enforce least-privilege attributes on existing role {role}",
-                     sql.SQL("ALTER ROLE {} WITH {}").format(_ident(role), attributes))
+            # Only attributes that differ: a non-superuser administrator (Azure) may not even restate
+            # NOSUPERUSER / NOREPLICATION / NOBYPASSRLS in ALTER ROLE.
+            changes = _attribute_changes(_role(conn, role), limit)
+            if changes:
+                plan.add(f"enforce least-privilege attributes on existing role {role}: {' '.join(changes)}",
+                         sql.SQL("ALTER ROLE {} WITH " + " ".join(changes)).format(_ident(role)))
             if reset_passwords:
                 if not password or len(password) < MIN_PASSWORD_LENGTH:
                     raise ProvisioningError(f"--reset-passwords needs a password of at least "
@@ -266,19 +282,14 @@ def build_plan(
              sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {}, {}").format(
                  _ident(app_role), _ident(reader_role)))
 
-    for table, privileges in APP_PRIVILEGES.items():
-        for privilege, columns in privileges:
-            target = (sql.SQL("{} ({})").format(sql.SQL(privilege), sql.SQL(", ").join(map(_ident, columns)))
-                      if columns else sql.SQL(privilege))
-            plan.add(f"{app_role}: {privilege}{'(' + ', '.join(columns) + ')' if columns else ''} on {table}",
-                     sql.SQL("GRANT {} ON {} TO {}").format(target, _table(table), _ident(app_role)))
+    if info["verifier_needs_reader_membership"]:
+        if not _has_inherited_membership(conn, info["current_user"], reader_role):
+            plan.add(f"{info['current_user']} (owner of the scope verifier, not a superuser) may see the backend start "
+                     f"of {reader_role}'s own sessions: inherited membership in {reader_role}",
+                     sql.SQL("GRANT {} TO {} WITH INHERIT TRUE").format(_ident(reader_role),
+                                                                        _ident(info["current_user"])))
 
-    for table, column in APP_IDENTITY_COLUMNS.items():
-        seq = _one(conn, "SELECT pg_get_serial_sequence(%s, %s)", (f"public.{table}", column))
-        seq_name = _value(seq, "pg_get_serial_sequence", 0)
-        if seq_name:
-            plan.add(f"{app_role}: identity sequence for {table}.{column}",
-                     sql.SQL("GRANT USAGE ON SEQUENCE {} TO {}").format(sql.SQL(seq_name), _ident(app_role)))
+    plan_app_grants(plan, conn, app_role, tuple(APP_PRIVILEGES))
 
     for table in READER_TABLES:
         plan.add(f"{reader_role}: SELECT on {table}",
@@ -305,6 +316,50 @@ def build_plan(
                      sql.SQL("CREATE POLICY {} ON {} AS PERMISSIVE FOR SELECT TO {} USING ({})").format(
                          _ident(reader_policy), _table(table), _ident(reader_role), expression))
     return plan
+
+
+_ATTRIBUTE_COLUMNS = (("rolcanlogin", "LOGIN", True), ("rolsuper", "SUPERUSER", False),
+                      ("rolcreatedb", "CREATEDB", False), ("rolcreaterole", "CREATEROLE", False),
+                      ("rolinherit", "INHERIT", False), ("rolreplication", "REPLICATION", False),
+                      ("rolbypassrls", "BYPASSRLS", False))
+
+
+def _attribute_changes(row, connection_limit: int) -> List[str]:
+    """ROLE_ATTRIBUTES keywords (plus CONNECTION LIMIT) whose current value differs from the target."""
+    names = ("rolname", "rolsuper", "rolcreaterole", "rolcreatedb", "rolbypassrls", "rolcanlogin",
+             "rolinherit", "rolreplication", "rolconnlimit")
+    current = dict(row) if isinstance(row, dict) else dict(zip(names, row))
+    changes = [(keyword if wanted else "NO" + keyword) for column, keyword, wanted in _ATTRIBUTE_COLUMNS
+               if bool(current[column]) != wanted]
+    if int(current["rolconnlimit"]) != int(connection_limit):
+        changes.append(f"CONNECTION LIMIT {int(connection_limit)}")
+    return changes
+
+
+def _has_inherited_membership(conn, member: str, role: str) -> bool:
+    """True when `member` already has the privileges of `role` (False if the role does not exist yet)."""
+    if _role(conn, role) is None:
+        return False
+    return bool(_value(_one(conn, "SELECT pg_has_role(%s, %s, 'USAGE') AS ok", (member, role)), "ok", 0))
+
+
+def plan_app_grants(plan: Plan, conn, app_role: str, tables: Tuple[str, ...]) -> None:
+    """GRANT statements of APP_PRIVILEGES / APP_IDENTITY_COLUMNS for the given tables (shared by 005 and 008)."""
+    for table in tables:
+        for privilege, columns in APP_PRIVILEGES[table]:
+            target = (sql.SQL("{} ({})").format(sql.SQL(privilege), sql.SQL(", ").join(map(_ident, columns)))
+                      if columns else sql.SQL(privilege))
+            plan.add(f"{app_role}: {privilege}{'(' + ', '.join(columns) + ')' if columns else ''} on {table}",
+                     sql.SQL("GRANT {} ON {} TO {}").format(target, _table(table), _ident(app_role)))
+    for table in tables:
+        column = APP_IDENTITY_COLUMNS.get(table)
+        if not column:
+            continue
+        seq = _one(conn, "SELECT pg_get_serial_sequence(%s, %s)", (f"public.{table}", column))
+        seq_name = _value(seq, "pg_get_serial_sequence", 0)
+        if seq_name:
+            plan.add(f"{app_role}: identity sequence for {table}.{column}",
+                     sql.SQL("GRANT USAGE ON SEQUENCE {} TO {}").format(sql.SQL(seq_name), _ident(app_role)))
 
 
 def _policy_exists(conn, table: str, name: str) -> bool:
@@ -414,7 +469,7 @@ def verify(conn, app_role: str = APP_ROLE, reader_role: str = READER_ROLE,
         if table not in READER_TABLES and reader_privs:
             problems.append(f"{reader_role} must not access {table}, has {reader_privs}")
         app_privs = report["privileges"][app_role][table]
-        if "TRUNCATE" in app_privs or ("DELETE" in app_privs and table != "user_sessions"):
+        if "TRUNCATE" in app_privs or ("DELETE" in app_privs and table not in APP_DELETE_TABLES):
             problems.append(f"{app_role} has destructive privileges on {table}: {app_privs}")
     for table in RLS_TABLES:
         enabled = _value(_one(conn, """SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n

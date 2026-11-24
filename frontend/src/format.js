@@ -30,3 +30,21 @@ export function answerActions(message, local = {}) {
 export function escalationPayload(message) {
   return { question: String(message?.question ?? '').slice(0, CHAT_MAX_LENGTH), message_id: message?.id };
 }
+
+// HR/IT escalation status as shown to employees and HR/IT staff.
+export const ESCALATION_STATUS_LABELS = {
+  open: 'Open',
+  in_progress: 'In progress',
+  resolved: 'Resolved',
+  closed: 'Closed',
+};
+
+export function escalationStatusLabel(status) {
+  return ESCALATION_STATUS_LABELS[status] ?? (status ? String(status) : '');
+}
+
+// Buttons offered for an escalation: the backend's allowed transitions for its current status.
+export function nextStatuses(status, transitions = {}) {
+  const next = transitions?.[status];
+  return Array.isArray(next) ? next : [];
+}

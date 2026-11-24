@@ -2,3 +2,7 @@
 *.png binary
 # Shell scripts must keep LF endings so bash can run them after a Windows checkout
 *.sh text eol=lf
+# Files copied into Linux images must keep LF endings (sshd_config, entrypoints, nginx template)
+deploy/azure/migration/** text eol=lf
+deploy/azure/*.template text eol=lf
+deploy/azure/*.conf text eol=lf

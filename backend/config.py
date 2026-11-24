@@ -44,9 +44,19 @@ class Settings(BaseSettings):
     session_ttl_minutes: int = 480          # absolute lifetime of a session
     session_idle_minutes: int = 60          # inactivity timeout
     trust_proxy_headers: bool = False       # honour X-Forwarded-For/-Proto (enable only behind a trusted proxy)
+    # Number of trusted proxies that each append one entry to X-Forwarded-For in front of the backend.
+    # Local Docker: 1 (nginx). Azure App Service: see deploy/azure/README.md (verified after deployment).
+    trusted_proxy_hops: int = 1
+    # Shared secret the frontend proxy adds as X-OnboardAI-Proxy-Key; when set, the backend rejects every
+    # request without it (except /health and /ready), so the backend is not usable directly.
+    backend_proxy_secret: str = ""
     login_max_failures_per_email: int = 5
     login_max_failures_per_ip: int = 20
     login_window_seconds: int = 900
+    # "auto": shared PostgreSQL table when DB_BACKEND=postgresql (safe across workers and replicas),
+    # in-process memory otherwise. "memory" / "database" force one of them.
+    login_rate_limit_backend: str = "auto"
+    login_rate_limit_max_keys: int = 10000  # bound on tracked keys for the in-memory limiter
     password_min_length: int = 12
 
     # File paths
@@ -67,6 +77,19 @@ class Settings(BaseSettings):
     health_db_timeout_seconds: int = 3
     # Server-side statement timeout for application (read-write) connections; 0 disables it.
     pg_statement_timeout_ms: int = 10000
+    # TLS: libpq sslmode (disable | allow | prefer | require | verify-ca | verify-full). APP_ENV=production
+    # requires verify-full (certificate chain AND host name checked). PG_SSLROOTCERT is the CA bundle; the
+    # backend image ships the Debian CA bundle at /etc/ssl/certs/ca-certificates.crt.
+    pg_sslmode: str = "prefer"
+    pg_sslrootcert: str = ""
+    # Bounded connection pool (per credential set). Connections are validated before reuse, recycled after
+    # PG_POOL_MAX_LIFETIME_SECONDS, discarded after connection errors, and reset (ROLLBACK + DISCARD ALL)
+    # when returned, so no transaction, session setting or employee scope survives into the next request.
+    pg_pool_enabled: bool = True
+    pg_pool_max_size: int = 5      # per credential set and instance; keep instances x size within the role CONNECTION LIMITs (app 20, reader 10)
+    pg_pool_timeout_seconds: float = 5.0
+    pg_pool_max_lifetime_seconds: int = 1800
+    pg_pool_validate_idle_seconds: float = 5.0
     # The app refuses to start as a superuser/BYPASSRLS role. Local-development escape hatch only: honoured
     # solely with APP_ENV=development; docker-compose.yml pins it to false.
     allow_privileged_db_connection: bool = False

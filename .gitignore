@@ -14,3 +14,5 @@ loadtest-output/
 # Database backups and dumps (may hold password hashes and the employee-scope signing key) - never commit
 backups/
 *.dump
+# Azure deployment settings with real subscription/resource names (deploy/azure/config.example.psd1 is the template)
+deploy/azure/config.psd1

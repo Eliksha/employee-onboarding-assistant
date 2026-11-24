@@ -1,0 +1,16 @@
+# Build context for deploy/azure/frontend.Dockerfile (repository root). Allow-list: frontend sources + nginx template.
+*
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/index.html
+!frontend/vite.config.js
+!frontend/eslint.config.js
+!frontend/public/
+!frontend/src/
+!deploy/azure/nginx.conf.template
+!deploy/azure/nginx-main.conf
+!deploy/azure/frontend-entrypoint.sh
+**/node_modules
+**/dist
+**/.env
+**/.env.*

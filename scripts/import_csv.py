@@ -34,7 +34,9 @@ def _postgres_connection():
     if user in {settings.pg_user, settings.pg_reader_user, db_roles.APP_ROLE, db_roles.READER_ROLE} - {""}:
         raise csv_import.CsvImportError(f"Refusing to import as {user}: use the dedicated import role")
     conn = psycopg2.connect(host=settings.pg_host, port=settings.pg_port, dbname=settings.pg_database, user=user,
-                            password=password, connect_timeout=10, application_name="onboardai-csv-import")
+                            password=password, connect_timeout=10, application_name="onboardai-csv-import",
+                            sslmode=settings.pg_sslmode.strip().lower() or "prefer",
+                            **({"sslrootcert": settings.pg_sslrootcert.strip()} if settings.pg_sslrootcert.strip() else {}))
     with conn.cursor() as cur:
         cur.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
         superuser, bypass = cur.fetchone()

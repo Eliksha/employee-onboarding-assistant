@@ -155,17 +155,17 @@ def _all_api_routes():
                     yield method, r.path
 
 
-PUBLIC = {("GET", "/health"), ("POST", "/auth/login")}
+PUBLIC = {("GET", "/health"), ("GET", "/ready"), ("POST", "/auth/login")}
 
 
 def test_route_inventory_is_complete():
     routes = set(_all_api_routes())
-    assert len(routes) == 19 and PUBLIC <= routes
+    assert len(routes) == 23 and PUBLIC <= routes
 
 
 @pytest.mark.parametrize("method, path", sorted(set(_all_api_routes()) - PUBLIC))
 def test_every_non_public_route_requires_authentication(app_client, method, path):
-    url = path.replace("{employee_id}", "EMP001").replace("{item_id}", "1")
+    url = path.replace("{employee_id}", "EMP001").replace("{item_id}", "1").replace("{escalation_id}", "1")
     r = app_client.request(method, url, json={})
     assert r.status_code == 401, f"{method} {path} -> {r.status_code}"
     assert r.json() == {"detail": "Authentication required. Please sign in."}

@@ -44,6 +44,16 @@ def fake_embed(texts):
 
 
 @pytest.fixture(autouse=True)
+def connection_pool_mode(monkeypatch):
+    """Pooling is off by default so fake-connection tests see one connection per call; pool behaviour has its
+    own tests (tests/unit/test_pg_pool.py, tests/integration/test_postgres_m6.py). ONBOARDAI_TEST_PG_POOL=1
+    runs a suite with the pool enabled (used for the live PostgreSQL suites)."""
+    monkeypatch.setattr(settings, "pg_pool_enabled", os.environ.get("ONBOARDAI_TEST_PG_POOL") == "1")
+    yield
+    postgres.close_all_pools()
+
+
+@pytest.fixture(autouse=True)
 def fast_test_password_hasher(monkeypatch):
     """Cheaper Argon2 parameters for test speed only; production defaults are asserted in test_auth.py."""
     from argon2 import PasswordHasher

@@ -89,4 +89,16 @@ export const feedbackApi = {
     api.post('/escalate', payload),
 };
 
+// HR/IT support escalation queue (role "hr" only; the backend enforces the role and the CSRF token).
+export const hrApi = {
+  list: (status) =>
+    api.get('/hr/escalations', { params: status ? { status } : {} }),
+
+  get: (id) =>
+    api.get(`/hr/escalations/${encodeURIComponent(id)}`),
+
+  update: (id, status, note) =>
+    api.patch(`/hr/escalations/${encodeURIComponent(id)}`, { status, note: note || null }),
+};
+
 export default api;

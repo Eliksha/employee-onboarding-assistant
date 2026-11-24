@@ -27,12 +27,13 @@ def feedback(body: FeedbackRequest, user: AuthUser = Depends(csrf_protected)):
 
 @router.post("/escalate", response_model=StatusResponse)
 def escalate(body: EscalateRequest, user: AuthUser = Depends(csrf_protected)):
-    """Escalate to HR/IT (simulated), attributed to the signed-in employee; optionally for one chat answer."""
+    """Put a question in the HR/IT support queue (GET /hr/escalations), attributed to the signed-in employee;
+    optionally for one chat answer. Delivery is in-app only: no e-mail or ticketing integration."""
     if body.message_id is not None:
         _assert_own_message(body.message_id, user)
         existing = db.find_escalation(body.message_id)
         if existing is not None:
-            return {"status": "already escalated to HR/IT (simulated)", "id": existing}
+            return {"status": "already in the HR/IT support queue", "id": existing}
     escalation_id = db.add_escalation(body.question, body.contact_pref, employee_id=user.employee_id,
-                                      message_id=body.message_id)
-    return {"status": "escalated to HR/IT (simulated)", "id": escalation_id}
+                                      message_id=body.message_id, actor_user_id=user.user_id)
+    return {"status": "sent to the HR/IT support queue", "id": escalation_id}

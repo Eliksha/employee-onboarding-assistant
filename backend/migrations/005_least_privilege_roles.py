@@ -43,7 +43,12 @@ from backend.services import db_roles
 
 
 def admin_connection():
+    """Owner/administrator connection; uses the same TLS settings as the application (PG_SSLMODE, PG_SSLROOTCERT)."""
+    tls = {"sslmode": settings.pg_sslmode.strip().lower() or "prefer"}
+    if settings.pg_sslrootcert.strip():
+        tls["sslrootcert"] = settings.pg_sslrootcert.strip()
     return psycopg2.connect(
+        **tls,
         host=settings.pg_host,
         port=settings.pg_port,
         dbname=settings.pg_database,
