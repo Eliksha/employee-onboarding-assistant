@@ -18,7 +18,7 @@ def test_build_context_excludes_secrets_and_local_state():
 
 def test_no_secrets_baked_into_compose_or_dockerfile():
     for text in (COMPOSE, DOCKERFILE):
-        assert "gsk_" not in text
+        assert not re.search(r"(?i)\bsk-[a-z0-9_-]{16,}", text)
         assert not re.search(r"(?i)(api_key|password)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{8,}", text.replace("${DOCKER_PG_PASSWORD", ""))
     assert COMPOSE.count("${DOCKER_PG_PASSWORD:?") == 2  # required at runtime, no default value
 

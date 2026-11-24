@@ -4,7 +4,7 @@ Every question below was run during Step 10 (21 November 2026) - against the loc
 
 ## Before the demo (5 minutes)
 
-1. Docker Desktop running; `.env` contains a working `GROQ_API_KEY`; FAISS index present in `data/index`.
+1. Docker Desktop running; the secrets file contains the Azure OpenAI settings (`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_KEY`) and the stack is started with `--env-file`; FAISS index present in `data/index`.
 2. `$env:DOCKER_PG_PASSWORD = "<local value>"` then `docker compose up -d --build --wait`.
 3. `docker compose ps` shows three healthy services.
 4. Provision demo accounts once (hidden password prompts; keep the passwords private):
@@ -50,7 +50,7 @@ Then reload the page: the conversation history is restored for this employee.
 
 Show the Mermaid diagram in the README and summarise:
 
-- React/nginx, FastAPI, PostgreSQL, FAISS with local fastembed embeddings, LLM via an OpenAI-compatible client (Groq temporarily; Azure OpenAI planned).
+- React/nginx, FastAPI, PostgreSQL, FAISS with local fastembed embeddings, LLM: Azure OpenAI GPT-4.1 deployment (OpenAI v1 Responses API, `store=false`).
 - Guardrails: retrieval gate, untrusted-context prompt, `NOT_FOUND`, output validation (citations, numbers, emails, secret leakage), cited-only sources.
 - Evidence: 145 backend tests (61 for authentication and authorization), 7 frontend tests, RAG evaluation 50/50, browser and Docker checks (see `docs/project_plan.md` and `docs/final_local_test_report.md`).
 
@@ -61,7 +61,7 @@ Show the Mermaid diagram in the README and summarise:
 
 ## 7. Honest limitations and next steps (1 minute)
 
-- Groq is temporary; Azure OpenAI and Azure hosting are not implemented yet (pending access).
+- Azure OpenAI is integrated; Azure hosting, managed PostgreSQL, HTTPS and Key Vault are not implemented yet.
 - Local email/password accounts only (no MFA, password reset or external identity provider); synthetic data only.
 - Known retrieval gaps (for example "Is there a cab if I work late?" is not answered although the handbook covers it).
 - Next: Azure OpenAI migration, managed PostgreSQL, Entra ID authentication, CI/CD.

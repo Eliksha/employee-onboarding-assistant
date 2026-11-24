@@ -29,6 +29,13 @@ def answer_policy(question: str) -> Dict:
     # Step 1: Retrieve relevant handbook chunks.
     hits = retriever.search(question, settings.top_k)
 
+    # Step 1b: Remove instructions aimed at the assistant from retrieved text (indirect prompt injection);
+    # passages left without policy content are dropped and can neither reach the LLM nor be cited.
+    hits, removed, dropped = guardrails.screen_passages(hits)
+    if removed:
+        logger.warning("retrieved text screened: %d instruction-like sentence(s) removed, %d passage(s) dropped",
+                       removed, dropped)
+
     # Step 2: Retrieval gate (threshold + corroborated borderline band).
     gate_ok, gate_reason = guardrails.retrieval_gate(question, hits)
     cited: List[Dict] = []

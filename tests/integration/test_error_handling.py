@@ -12,7 +12,7 @@ from backend.main import app
 from backend.routes import chat as chat_route
 from backend.services import db, employee_db, llm, orchestrator, retriever
 
-FAKE_KEY = "gsk_FAKEKEYStep7LoggingTest0123456789"
+FAKE_KEY = "FakeAzureOpenAIKeyStep7LoggingTest0123456789"
 FAKE_PW = "FakePgPassword-Step7!"
 QUESTION = "Synthetic private question 4711 about my salary"
 HITS = [{"source": "handbook.md", "section": "3. Payroll",
@@ -22,7 +22,7 @@ HITS = [{"source": "handbook.md", "section": "3. Payroll",
 @pytest.fixture
 def client(emp1_client, monkeypatch):
     """Signed-in employee (EMP001); fake secrets so leakage checks have something to look for."""
-    monkeypatch.setattr(settings, "groq_api_key", FAKE_KEY)
+    monkeypatch.setattr(settings, "azure_openai_api_key", FAKE_KEY)
     monkeypatch.setattr(settings, "pg_password", FAKE_PW)
     return emp1_client
 
@@ -163,7 +163,7 @@ def test_logs_contain_no_secrets_or_question_text(client, accounts, monkeypatch,
     text = _all_log_text(caplog)
     assert "chat answered" in text and "unhandled error" in text and "login failed" in text
     session_cookie = relog.cookies.get(settings.session_cookie_name) or client.cookies.get(settings.session_cookie_name)
-    secrets_to_check = (FAKE_KEY, FAKE_PW, "gsk_", QUESTION, "4711", accounts["emp1"].password,
+    secrets_to_check = (FAKE_KEY, FAKE_PW, QUESTION, "4711", accounts["emp1"].password,
                         accounts["emp2"].password, accounts["emp2"].email, relog.json()["csrf_token"], session_cookie)
     for secret in secrets_to_check:
         assert secret not in text, f"log leaked: {secret[:6]}..."

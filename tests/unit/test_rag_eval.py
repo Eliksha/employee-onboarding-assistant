@@ -103,21 +103,24 @@ def test_injected_passage_is_sent_as_context_not_as_system_instruction(monkeypat
 
     def create(**kwargs):
         captured.update(kwargs)
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="<think>x</think>ok"))])
+        return SimpleNamespace(status="completed", output_text="<think>x</think>ok")
 
-    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    fake = SimpleNamespace(responses=SimpleNamespace(create=create))
     monkeypatch.setattr(llm, "_client", lambda: fake)
     injected = {"source": "injected_test_doc.md", "section": "Notice", "text": ev.INJECTION_CASES[0][3]}
     assert llm.generate_answer("When is my salary credited?", [injected] + PASSAGES) == "ok"
 
-    system, user = captured["messages"]
-    assert system["role"] == "system" and system["content"] == llm.SYSTEM_PROMPT
-    assert ev.CANARY not in system["content"]
-    assert ev.CANARY in user["content"] and "[1] (injected_test_doc.md - Notice)" in user["content"]
+    (user,) = captured["input"]
+    assert captured["instructions"] == llm.SYSTEM_PROMPT and user["role"] == "user"
+    assert ev.CANARY not in captured["instructions"]
+    # The injected instruction is screened out before the prompt is built; legitimate passages stay as context.
+    assert ev.CANARY not in user["content"] and "injected_test_doc.md" not in user["content"]
+    assert user["content"].startswith("<untrusted_context>\n[1] (handbook.md - ")
     assert captured["temperature"] == 0
 
 
 def test_leak_detector_never_needs_to_print_secret(monkeypatch):
-    monkeypatch.setattr(settings, "groq_api_key", "gsk_TESTFAKEKEY1234567890")
-    assert "API key leaked" in ev._leaks("here: gsk_TESTFAKEKEY1234567890")
+    monkeypatch.setattr(settings, "azure_openai_api_key", "TESTFAKEAZUREKEY1234567890")
+    assert "API key leaked" in ev._leaks("here: TESTFAKEAZUREKEY1234567890")
+    assert "key-like token" in ev._leaks("here: sk-abcdefghijklmnop1234")
     assert ev._leaks("Salary is credited on the last working day [Handbook 3].") == []

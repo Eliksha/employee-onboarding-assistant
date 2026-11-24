@@ -14,7 +14,7 @@ EY GDS capstone project - Domain: Generative AI for Human Resources.
 | Frontend (React + Vite) | Implemented; browser end-to-end checks passed |
 | Persistence | PostgreSQL 16 (primary), SQLite (local fallback and tests) |
 | Docker Compose (frontend + backend + PostgreSQL) | Implemented and verified locally |
-| LLM provider | **Groq (temporary, development only)** |
+| LLM provider | **Azure OpenAI, GPT-4.1 deployment** (OpenAI v1 Responses API, `store=false`) |
 | Azure (Azure OpenAI, hosting, identity) | **Not started** - planned final platform, pending Azure access |
 | Authentication / authorization | Email + password (Argon2id), server-side sessions, CSRF protection, per-employee authorization, admin role - implemented and tested locally |
 | External identity (Microsoft Entra ID / OAuth) | Not implemented (out of scope for now) |
@@ -45,7 +45,7 @@ flowchart LR
     rag --> emb["fastembed<br/>BAAI/bge-small-en-v1.5"]
     rag --> idx[("FAISS index<br/>data/index")]
     rag --> guard["Guardrails<br/>retrieval gate, output validation"]
-    guard --> llm["LLM API<br/>Groq (temporary)<br/>Azure OpenAI (planned)"]
+    guard --> llm["Azure OpenAI<br/>GPT-4.1 deployment<br/>v1 Responses API, store=false"]
     api -->|"chat history, tickets, checklist"| edb
     fe -->|"POST /api/auth/login"| authn["Auth: Argon2id passwords,<br/>server-side sessions, CSRF,<br/>login rate limiting"]
     authn --> edb
@@ -61,7 +61,7 @@ More detail, including the RAG decision flow: [docs/architecture.md](docs/archit
 | Frontend | React 19, Vite, axios, lucide-react; nginx (Docker) |
 | Backend | Python, FastAPI, Pydantic, Uvicorn |
 | Retrieval | fastembed (`BAAI/bge-small-en-v1.5`, local, no API key), FAISS `IndexFlatIP` (cosine) |
-| LLM | OpenAI-compatible client against Groq (temporary); Azure OpenAI planned |
+| LLM | Azure OpenAI GPT-4.1 deployment through the OpenAI Python SDK (v1 Responses API, API key, `store=false`) |
 | Database | PostgreSQL 16 (psycopg2); SQLite fallback |
 | Containers | Docker, Docker Compose |
 | Testing | pytest, Node test runner, locust (load test), RAG and held-out hybrid evaluation scripts, GitHub Actions CI |
@@ -92,9 +92,10 @@ Copy-Item .env.example .env
 
 | Variable | Default (code) | Purpose |
 |---|---|---|
-| `GROQ_API_KEY` | empty | LLM API key (required for chat answers) |
-| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | OpenAI-compatible LLM endpoint |
-| `MODEL_NAME` | `qwen/qwen3.8-27b` | Chat model name |
+| `AZURE_OPENAI_ENDPOINT` | empty | Azure resource v1 endpoint, e.g. `https://<resource>.services.ai.azure.com/openai/v1` (bare resource URL accepted; `AZURE_OPENAI_BASE_URL` is an alias) |
+| `AZURE_OPENAI_DEPLOYMENT` | empty | Azure deployment name (`gpt-4.1`) |
+| `AZURE_OPENAI_API_KEY` | empty | API key; required for chat answers (missing configuration -> 503, no request sent) |
+| `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` / `LLM_MAX_OUTPUT_TOKENS` | `30` / `2` / `600` | Request timeout, SDK retries, answer length limit |
 | `EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model (fastembed) |
 | `SIMILARITY_THRESHOLD` | `0.65` | Minimum top retrieval score |
 | `BORDERLINE_MARGIN` | `0.05` | Band below the threshold that needs keyword corroboration |
@@ -278,14 +279,14 @@ Install the pinned development tools first: `pip install -r requirements-dev.txt
 
 | Command | What it covers | Latest verified result |
 |---|---|---|
-| `python -m pytest -q` | Unit and integration tests (routing, orchestration, RAG, guardrails, auth, isolation, API, error handling, logging, frontend contract, Docker config, evaluation dataset, CSV import, PDF index, feedback/escalation, security headers). Always uses a temporary SQLite database; PostgreSQL connections are blocked. The real-embedding retrieval tests need the FAISS index (`python -m backend.services.ingest`). | **545 passed, 0 skipped** (M5, 23 Nov 2026, Python 3.12 in a clean container, CI-equivalent) |
+| `python -m pytest -q` | Unit and integration tests (routing, orchestration, RAG, guardrails, auth, isolation, API, error handling, logging, frontend contract, Docker config, evaluation dataset, CSV import, PDF index, feedback/escalation, security headers). Always uses a temporary SQLite database; PostgreSQL connections are blocked. The real-embedding retrieval tests need the FAISS index (`python -m backend.services.ingest`). | **624 passed, 0 skipped** (Azure OpenAI integration, 24 Nov 2026, local venv; earlier: 545 in the CI-equivalent Python 3.12 container) |
 | `ONBOARDAI_PG_TEST_ADMIN_DSN=... python -m pytest tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py` | Live PostgreSQL roles, RLS, signed scope, isolation attacks, import role, CSV import, schema dictionary and migration 007 against a **disposable** local server | **125 passed** (M5) |
 | `cd frontend; npm test` / `npm run lint` / `npm run build` | Frontend helper tests, ESLint, production build | **11 passed** / 0 problems / built (M5) |
 | `python -m scripts.hybrid_eval --routing-only` | Held-out routing accuracy (62 questions, deterministic; also a CI regression floor) | **62/62** (M4; 60/62 in M3) |
 | `python -m scripts.hybrid_eval --report docs/hybrid_eval_report.md` | Held-out end-to-end evaluation: routing, records correctness, refusals, retrieval, grounding, citations, mixed answers, fallbacks, latency by route kind (isolated SQLite copy; Groq for handbook answers) | M4: every quality metric 62/62 or 30/30 (before/after in [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md)) |
 | `python -m scripts.import_csv data/csv` / `python -m scripts.schema_dictionary --check` | CSV import dry run (see runbook section 10) / schema dictionary vs a database | - |
 | `bash tests/load/run_isolated_load_test.sh` | Small load test (locust) against a throw-away stack with least-privilege roles; `WITH_EVAL=1` also runs the HTTP evaluation | See [docs/load_test_report.md](docs/load_test_report.md) |
-| `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs `GROQ_API_KEY`, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (20 Nov 2026, live Groq; before Phases 1-2) |
+| `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs the Azure OpenAI settings, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (20 Nov 2026, live Groq; before Phases 1-2) |
 
 **Continuous integration** (`.github/workflows/ci.yml`, on pushes to `dev`/`main`, pull requests and manual runs): backend tests on Python 3.12 with the index built from `data/raw` and a no-skip check; the live PostgreSQL security suite against a disposable `postgres:16-alpine` container with a per-job random password; frontend test/lint/build on Node 24; Docker image builds with smoke checks (pip check, import, no dev tools in the image, non-root user) and `docker compose config`. No deployment, no image push, no real secrets (the LLM is mocked). The workflow's steps were verified in equivalent local containers; its first GitHub Actions run happens after the owner pushes it.
 
@@ -297,19 +298,19 @@ Additional checks performed during development (scripts not in the repository): 
 - Secrets are supplied only through `.env` or environment variables; `.env` is excluded from git and Docker build contexts.
 - Every endpoint except `/health` and `/auth/login` requires a session; employees can only reach their own records; `POST /ingest` requires the admin role. See [Authentication and authorization](#authentication-and-authorization).
 
-## Planned migration to Azure OpenAI (not implemented)
+## Azure OpenAI (implemented)
 
-Groq is used temporarily because Azure access is not yet available. The planned migration, once access is granted:
+Azure OpenAI is the only LLM provider (Groq has been removed). `backend/services/llm.py` uses the OpenAI Python SDK against the resource's v1 endpoint with the Responses API: `model` = the deployment name (`gpt-4.1`), the grounded system prompt as `instructions`, the retrieved passages wrapped as untrusted context in `input`, `temperature=0`, `store=false`; no dated `api-version` is needed. Missing or invalid configuration fails closed (503, no request); provider errors are logged with type and HTTP status only; a content-filtered prompt or an incomplete response produces the standard fallback. Instructions aimed at the assistant inside retrieved text (indirect prompt injection) are removed before the prompt is built, keeping the rest of the policy passage. Evaluation results: `docs/azure_eval_report.md`, `docs/rag_eval_report.md`. Setup and activation: runbook section 13.
 
-1. Provision an Azure OpenAI resource and a chat model deployment in an approved region.
-2. Point the existing OpenAI-compatible client to Azure: either use Azure OpenAI's OpenAI-compatible endpoint through the existing base URL / key / model settings, or add a small provider switch in `backend/services/llm.py` for the Azure endpoint, API version and deployment name. Rename the Groq-specific variables accordingly.
-3. Store keys in Azure Key Vault or use managed identity instead of `.env`.
-4. Re-run `python -m pytest -q` and `python -m scripts.rag_eval`; re-validate `SIMILARITY_THRESHOLD`, `BORDERLINE_MARGIN` and `NOT_FOUND` behaviour with the new model.
+Remaining Azure work (not implemented):
+
+1. Store keys in Azure Key Vault or use managed identity / Entra ID authentication instead of an API key in a secrets file.
+2. Re-validate `SIMILARITY_THRESHOLD`, `BORDERLINE_MARGIN` and `NOT_FOUND` behaviour periodically with real questions.
 5. Decide hosting, managed PostgreSQL and HTTPS before any non-local deployment; decide later whether to keep local accounts or move to an external identity provider (for example Microsoft Entra ID).
 
 ## Known limitations
 
-- Groq is a temporary provider; no Azure resources exist yet.
+- Only Azure OpenAI is used; hosting, managed PostgreSQL, HTTPS and Key Vault are not set up yet (the stack runs locally in Docker).
 - Authentication is local email/password only: no MFA, no password reset or self-service password change, no external identity provider, no admin UI (admin actions are API-only).
 - Login rate limiting is held in process memory: it resets on restart and is not shared across multiple backend processes; a locked email blocks that account for up to 15 minutes (possible nuisance lockout). In Docker the backend port 8000 is also published on localhost while `X-Forwarded-For` is trusted, so a local client could bypass the per-IP limit (the per-email limit still applies).
 - Synthetic, single-company knowledge base (48 chunks); retrieval misses some paraphrased questions (documented in the RAG report).

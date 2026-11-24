@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Optional
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -15,10 +16,18 @@ class Settings(BaseSettings):
         protected_namespaces=(),
     )
 
-    # LLM and RAG
-    groq_api_key: str = ""
-    groq_base_url: str = "https://api.groq.com/openai/v1"
-    model_name: str = "qwen/qwen3.8-27b"
+    # LLM: Azure OpenAI (GPT-4.1 deployment) through the OpenAI v1 Responses API (backend/services/llm.py).
+    # The endpoint is the resource's v1 base URL (https://<resource>.services.ai.azure.com/openai/v1); the bare
+    # resource URL is also accepted and normalised. AZURE_OPENAI_BASE_URL is accepted as an alias.
+    azure_openai_endpoint: str = Field("", validation_alias=AliasChoices("AZURE_OPENAI_ENDPOINT",
+                                                                         "AZURE_OPENAI_BASE_URL"))
+    azure_openai_deployment: str = ""
+    azure_openai_api_key: str = ""
+    llm_timeout_seconds: float = 30.0
+    llm_max_retries: int = 2
+    llm_max_output_tokens: int = 600
+
+    # RAG
     embed_model: str = "BAAI/bge-small-en-v1.5"
     similarity_threshold: float = 0.65
     # Scores in [threshold - margin, threshold) reach the LLM only with keyword corroboration.

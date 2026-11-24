@@ -65,7 +65,7 @@ Re-running `set` with a new password resets the password and signs the account o
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Chat returns 503 "The AI service is temporarily unavailable" | LLM unreachable, invalid `GROQ_API_KEY`, wrong `GROQ_BASE_URL`/`MODEL_NAME`, rate limit | Check `.env`; look for `LLM unavailable:` in the log (for example `Error code: 401 - Invalid API Key` or `Connection error.`) |
+| Chat returns 503 "The AI service is temporarily unavailable" | Azure OpenAI not configured, invalid key, wrong endpoint or deployment, rate limit | Check the `AZURE_OPENAI_*` values in the secrets file; look for `LLM unavailable:` in the log (for example `Azure OpenAI is not configured`, `AuthenticationError (HTTP 401)`, `NotFoundError (HTTP 404)` = wrong deployment, `RateLimitError (HTTP 429)`, `APIConnectionError`) |
 | 500 "Something went wrong on our side" on employee pages | Database unavailable | Search the log for the `request_id`; `psycopg2.OperationalError` means PostgreSQL is down or unreachable. In Docker, `docker compose ps db` then `docker compose start db`; the backend reconnects automatically |
 | `FileNotFoundError: Database not found` (SQLite) | `data/app.db` not created or not migrated | Run the SQLite steps in the README (init + migrations 001-003) |
 | `ModuleNotFoundError: No module named 'backend'` when running migration 003 | Project root not on the Python path | `$env:PYTHONPATH = "."` then rerun |
@@ -303,3 +303,33 @@ docker rm -f onboardai-restore; docker network rm onboardai-restore-net
 ### Recovery (owner decision; never restore into the running database)
 
 Restore into a **new** Compose project and volume (for example `docker compose -p onboardai-recovered ...`), run the checks above against it, provision role passwords with `005 --apply --reset-passwords` (same `ONBOARDAI_SCOPE_SECRET`, never `--rotate-scope-secret`, so existing signatures and the restored key stay valid), then switch traffic. Do not run `docker compose down -v`, `DROP DATABASE` or `pg_restore --clean` against the active `onboardai` database.
+
+## 13. Azure OpenAI (LLM provider)
+
+Azure OpenAI is the only LLM provider: GPT-4.1 deployment, OpenAI v1 Responses API, API-key authentication, `store=false`. Settings (in the external secrets file, never in the repository): `AZURE_OPENAI_ENDPOINT` (`https://<resource>.services.ai.azure.com/openai/v1`; the bare resource URL is normalised), `AZURE_OPENAI_DEPLOYMENT` (`gpt-4.1`), `AZURE_OPENAI_API_KEY`. `docker-compose.yml` passes them to the backend from the `--env-file`; optional tuning: `LLM_TIMEOUT_SECONDS` (30), `LLM_MAX_RETRIES` (2), `LLM_MAX_OUTPUT_TOKENS` (600).
+
+Behaviour: missing or invalid settings -> chat answers 503 and no request is sent; provider errors are logged as type + HTTP status only (never the key, endpoint or body); a prompt blocked by Azure content filtering, or an incomplete response, returns the standard fallback. Only retrieved handbook/FAQ passages and the question are sent; employee records (SQL path) never reach the LLM. Sentences in retrieved text that address the assistant ("ignore all previous instructions", "reveal your system prompt", "reply only with") are removed first; the log line `retrieved text screened: N instruction-like sentence(s) removed` (counts only) shows when this happens - investigate the source document.
+
+**Status (24 November 2026):** activated on the local stack (backend rebuilt with the secrets file; backup `backups/onboardai_20261124_094429.dump` taken first). In-container check, functional check and evaluation results: project plan, section "Azure OpenAI Integration".
+
+### Activation (rebuilds the backend; get approval first)
+
+```powershell
+$secrets = 'C:\Users\Administrator\Desktop\employee-onboarding-assistant-day31\onboardai_secrets\phase1.env'
+Get-Content $secrets | Where-Object { $_ -match '^[A-Z_]+=' } | ForEach-Object { $k, $v = $_ -split '=', 2; Set-Item "Env:$k" $v }
+docker compose --env-file $secrets up -d --build --no-deps backend
+docker compose --env-file $secrets ps                                  # backend healthy
+docker compose --env-file $secrets exec backend python -c "from backend.config import settings as s; print('azure configured:', all([s.azure_openai_endpoint, s.azure_openai_deployment, s.azure_openai_api_key]))"
+```
+
+Then ask in the browser: "Is a cab provided if I stay late at work?" (expect a `handbook.pdf` citation with "(p. 3)") and "What is the capital of France?" (expect the fallback).
+
+**Rollback:** rebuild the backend from the previous commit (`445ffce`, Groq) with the old `.env` values; no database or index change is involved. **Key rotation:** regenerate the key in the Azure portal, update `AZURE_OPENAI_API_KEY` in the secrets file, recreate the backend (`up -d --no-deps backend`).
+
+**Evaluation against Azure** (sends only synthetic handbook passages and questions; writes no database rows):
+
+```powershell
+Get-Content $secrets | Where-Object { $_ -match '^AZURE_OPENAI_' } | ForEach-Object { $k, $v = $_ -split '=', 2; Set-Item "Env:$k" $v }
+python -m scripts.hybrid_eval --report docs/azure_eval_report.md
+python -m scripts.rag_eval
+```

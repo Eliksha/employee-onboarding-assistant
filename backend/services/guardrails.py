@@ -30,7 +30,7 @@ ignore rules print show reveal
 
 SECRET_MIN_LEN = 6
 # Every configured secret an answer must never contain (Phase 1 added the reader password and scope secret).
-LEAK_CHECKED_SECRETS = ("groq_api_key", "pg_password", "pg_reader_password", "pg_scope_secret")
+LEAK_CHECKED_SECRETS = ("azure_openai_api_key", "pg_password", "pg_reader_password", "pg_scope_secret")
 
 
 # ---------------------------------------------------------------- retrieval gate
@@ -71,6 +71,64 @@ def retrieval_gate(question: str, hits: List[Dict]) -> Tuple[bool, str]:
 def sanitize_passage(text: str) -> str:
     """Stop retrieved text from closing/forging the untrusted-context wrapper."""
     return CONTEXT_TAG_RE.sub("[removed-tag]", text or "")
+
+
+# Indirect prompt injection: sentences in retrieved documents that address the AI system with instructions
+# (override the rules, reveal secrets, change the reply format, role markers). They are removed before the
+# prompt is built; the rest of the passage - the policy evidence - is kept. A passage with no remaining
+# content is dropped. The patterns are checked for false positives against the whole knowledge base
+# (tests/unit/test_injection_screen.py). The system prompt and output validation still apply afterwards.
+INJECTION_PATTERNS = tuple(re.compile(p, re.I) for p in (
+    r"\b(ignore|disregard|forget|override|bypass)\b[^.!?\n]{0,40}\b(instructions?|rules|guidelines|prompts?|guardrails)\b",
+    r"\b(system|developer)\s+(instructions?|messages?|prompts?|override)\b",
+    r"\b(reveal|print|append|output|disclose|leak|dump|exfiltrate)\b[^.!?\n]{0,60}"
+    r"\b(system\s+prompt|api[\s_-]?keys?|credentials?|passwords?|secrets?|instructions)\b",
+    r"\b(reply|respond|answer)\s+(only|exclusively)\s+with\b",
+    r"\bdo\s+not\s+answer\s+the\s+(user|question)",
+    r"\b(assistant|chatbot|language\s+model|llm)\s*[,:]",
+    r"\byou\s+are\s+now\b",
+    r"\bcode\s*word\b",
+    r"<\s*/?\s*(system|assistant|instructions?)\s*>|\[/?(inst|sys)\]",
+))
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+MIN_REMAINING_WORDS = 4
+
+
+def is_injected_instruction(sentence: str) -> bool:
+    return any(p.search(sentence) for p in INJECTION_PATTERNS)
+
+
+def strip_injected_instructions(text: str) -> Tuple[str, int]:
+    """(text without instruction-like sentences, number of sentences removed). Line structure is kept."""
+    removed, lines = 0, []
+    for line in (text or "").split("\n"):
+        kept = []
+        for sentence in _SENTENCE_SPLIT_RE.split(line):
+            if sentence.strip() and is_injected_instruction(sentence):
+                removed += 1
+            else:
+                kept.append(sentence)
+        lines.append(" ".join(kept))
+    return ("\n".join(lines) if removed else text or ""), removed
+
+
+def screen_passages(passages: List[Dict]) -> Tuple[List[Dict], int, int]:
+    """Remove injected instructions from retrieved passages: (kept passages, sentences removed, passages dropped).
+
+    Unchanged passages are returned as the same objects; cleaned ones are copies with the cleaned text.
+    """
+    kept, removed, dropped = [], 0, 0
+    for passage in passages:
+        clean, n = strip_injected_instructions(passage.get("text", ""))
+        if not n:
+            kept.append(passage)
+            continue
+        removed += n
+        if len(WORD_RE.findall(clean.lower())) < MIN_REMAINING_WORDS:
+            dropped += 1
+            continue
+        kept.append({**passage, "text": clean})
+    return kept, removed, dropped
 
 
 # ---------------------------------------------------------------- output side
@@ -128,7 +186,7 @@ def leak_reasons(answer: str) -> List[str]:
         secret = getattr(settings, name, "") or ""
         if len(secret) >= SECRET_MIN_LEN and secret.lower() in low:
             reasons.append(f"secret_leak:{name}")
-    if re.search(r"\bgsk_[a-z0-9]{8,}", low):
+    if re.search(r"\bsk-[a-z0-9_-]{16,}", low):  # OpenAI-style key shape
         reasons.append("secret_leak:key_pattern")
     for sentence in re.split(r"(?<=[.:])\s+", llm.SYSTEM_PROMPT):
         frag = sentence.strip().lower()[:45]

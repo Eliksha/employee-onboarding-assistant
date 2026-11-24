@@ -103,7 +103,7 @@ def test_every_protected_route_rejects_a_logged_out_session(app_client, accounts
 
 
 # ---------------------------------------------------------------- no sensitive data in responses
-SENSITIVE_KEYS = {"password", "password_hash", "token_hash", "session", "user_id", "pg_password", "groq_api_key"}
+SENSITIVE_KEYS = {"password", "password_hash", "token_hash", "session", "user_id", "pg_password", "azure_openai_api_key"}
 
 
 def _keys(obj):

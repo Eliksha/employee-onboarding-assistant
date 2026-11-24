@@ -30,7 +30,7 @@ services:
   backend:
     build: .
     env_file:
-      - path: .env          # LLM / RAG settings (GROQ_API_KEY, MODEL_NAME, ...); optional
+      - path: .env          # optional local RAG settings; Azure OpenAI values come from the secrets file
         required: false
     environment:
       # Container database always overrides any local PG_* values from .env.
@@ -39,13 +39,19 @@ services:
       PG_PORT: "5432"
       PG_DATABASE: onboardai
       # Least-privilege roles (backend/migrations/005_least_privilege_roles.py). Until they are provisioned
-      # and DOCKER_PG_APP_* / DOCKER_PG_READER_* are set, the backend keeps using the owner account.
+      # and DOCKER_PG_APP_* / DOCKER_PG_READER_* are set, PG_USER falls back to the owner account, which the
+      # backend refuses at startup (fail closed; see ALLOW_PRIVILEGED_DB_CONNECTION below).
       PG_USER: ${DOCKER_PG_APP_USER:-onboardai}
       PG_PASSWORD: ${DOCKER_PG_APP_PASSWORD:-${DOCKER_PG_PASSWORD:?Set DOCKER_PG_PASSWORD for the container database}}
       PG_READER_USER: ${DOCKER_PG_READER_USER:-}
       PG_READER_PASSWORD: ${DOCKER_PG_READER_PASSWORD:-}
       PG_SCOPE_SECRET: ${DOCKER_PG_SCOPE_SECRET:-}      # same value stored by migration 005
       HF_HUB_OFFLINE: "1"   # embedding model is baked into the image
+      # Azure OpenAI (GPT-4.1 deployment, v1 Responses API). Values come from the external secrets file
+      # (docker compose --env-file <secrets file> ...); never baked into the image or written to the repository.
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
       # The backend sits behind nginx: use its X-Forwarded-For / -Proto for login rate limiting and
       # Secure cookies. SESSION_COOKIE_SECURE=auto sets Secure automatically once HTTPS terminates in front.
       TRUST_PROXY_HEADERS: "true"

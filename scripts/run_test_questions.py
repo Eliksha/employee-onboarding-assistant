@@ -30,7 +30,7 @@ QUESTIONS = [
 
 def main():
     rows, passed = [], 0
-    print(f"Threshold: {settings.similarity_threshold} | model: {settings.model_name}\n")
+    print(f"Threshold: {settings.similarity_threshold} | Azure OpenAI deployment: {settings.azure_openai_deployment}\n")
     for i, (q, kind, expect) in enumerate(QUESTIONS, 1):
         try:
             r = rag.answer_question(q)
@@ -52,7 +52,7 @@ def main():
         time.sleep(1)  # be gentle with free-tier rate limits
 
     out = ["# Test Report - Day 32 (15 test questions)", "",
-           f"Model: `{settings.model_name}` | Threshold: `{settings.similarity_threshold}` | Top-k: `{settings.top_k}`", "",
+           f"LLM: Azure OpenAI deployment `{settings.azure_openai_deployment}` | Threshold: `{settings.similarity_threshold}` | Top-k: `{settings.top_k}`", "",
            f"**Auto-check result: {passed}/{len(QUESTIONS)} passed.** CHECK = review the answer manually.", "",
            "| # | Question | Type | Found | Top score | Answer | Result |", "|---|---|---|---|---|---|---|"]
     for r in rows:

@@ -14,7 +14,7 @@ flowchart LR
     rag --> emb["fastembed<br/>BAAI/bge-small-en-v1.5"]
     rag --> idx[("FAISS index<br/>data/index")]
     rag --> guard["Guardrails"]
-    guard --> llm["LLM API<br/>Groq (temporary)<br/>Azure OpenAI (planned)"]
+    guard --> llm["Azure OpenAI<br/>GPT-4.1 deployment<br/>v1 Responses API, store=false"]
     api -->|"chat history, tickets, checklist"| edb
     api --> sec["Security dependencies<br/>session, CSRF, own-employee, admin role"]
     sec --> edb
@@ -138,8 +138,8 @@ flowchart LR
 | Ingestion | `backend/services/ingest.py` | Canonical PDF (page + heading aware) and FAQ chunking, 2-sentence retrieval windows, embedding, versioned FAISS index with atomic activation |
 | Retrieval | `backend/services/retriever.py`, `embeddings.py` | Local embeddings, top-k small-to-big search over the active index version (read-only, hot reload, last good version kept) |
 | CSV import and schema dictionary | `backend/services/csv_import.py`, `scripts/import_csv.py`, `backend/services/schema_dictionary.py` + `.json`, `backend/migrations/006_import_role.py` | Validated idempotent HR data import as `onboardai_importer`; machine-readable schema checked against the catalog |
-| Guardrails | `backend/services/guardrails.py` | Retrieval gate, context sanitising, output validation, cited-source mapping |
-| LLM client | `backend/services/llm.py` | OpenAI-compatible client (Groq temporarily), grounded system prompt |
+| Guardrails | `backend/services/guardrails.py` | Retrieval gate, injected-instruction screen for retrieved text, context sanitising, output validation, cited-source mapping |
+| LLM client | `backend/services/llm.py` | Azure OpenAI GPT-4.1 deployment via the OpenAI SDK (v1 Responses API, `store=false`), grounded system prompt, fail-closed configuration, sanitised errors |
 | Authentication | `backend/services/auth.py`, `auth_schema.py`, `backend/security.py`, `backend/routes/auth.py`, `backend/manage_accounts.py` | Argon2id passwords, server-side sessions, CSRF, login rate limiting, authorization dependencies, dev account provisioning |
 | Persistence | `backend/services/db.py`, `employee_db.py` | Chat history, tickets, checklist, employee data, accounts and sessions (PostgreSQL or SQLite) |
 | Read-only data access | `backend/services/readonly_query.py`, `postgres.py`, `employee_scope.py` | SQL-agent path: statements parsed with PostgreSQL's parser (pglast) and allow-listed (one SELECT; reader tables, functions, cast types), READ ONLY transactions, statement timeout, row limit; `onboardai_reader` role with row-level security bound to an HMAC-signed, connection-bound, expiring employee scope verified in the database |
@@ -156,7 +156,7 @@ flowchart LR
 
 ## Planned Azure target (not implemented)
 
-Azure OpenAI replaces Groq; hosting, managed PostgreSQL, HTTPS and secret storage (Key Vault / managed identity) are to be confirmed once Azure access is available. Local email/password authentication is implemented; an external identity provider (for example Microsoft Entra ID) is a possible later change, not current scope. See the migration section in the root [README](../README.md).
+Azure OpenAI (GPT-4.1) is implemented and is the only LLM provider; hosting, managed PostgreSQL, HTTPS and secret storage (Key Vault / managed identity) are to be confirmed once Azure access is available. Local email/password authentication is implemented; an external identity provider (for example Microsoft Entra ID) is a possible later change, not current scope. See the migration section in the root [README](../README.md).
 
 ## Historical design
 

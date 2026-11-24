@@ -124,7 +124,7 @@ Solo project: Eliksha Maheshwari handles architecture/integration, backend, AI/L
 
 ## 10. Next Immediate Step
 
-**Next:** M4 + M5 are committed (`cde4538`) and activated locally (see "M4 + M5 Local Activation" at the end of this file). Pre-Azure remediation of the three HIGH audit findings (S1 backups ignored, S2 fail closed on privileged database roles, D3 tested backup/restore) implemented and verified, not committed; S2 takes effect on the next backend rebuild (see "Pre-Azure Remediation" at the end of this file). Remaining local checks: handbook page-citation verification and employee-level authorization testing on the activated stack; optional migration 006 for CSV import. Azure milestones (A1 onward) remain ON HOLD.
+**Next:** M4 + M5 are committed (`cde4538`) and activated locally (see "M4 + M5 Local Activation" at the end of this file). Pre-Azure remediation of the three HIGH audit findings (S1 backups ignored, S2 fail closed on privileged database roles, D3 tested backup/restore) implemented and verified, not committed; S2 takes effect on the next backend rebuild (see "Pre-Azure Remediation" at the end of this file). Azure OpenAI (GPT-4.1, Responses API) integrated, evaluated (RAG 50/50, held-out 100%) and active on the local stack, replacing Groq; not committed (see "Azure OpenAI Integration" at the end of this file). Remaining local checks: handbook page-citation verification and employee-level authorization testing on the activated stack; optional migration 006 for CSV import. Azure milestones (A1 onward) remain ON HOLD.
 
 ### PostgreSQL Dependency Update — 20 November 2026
 
@@ -1592,3 +1592,44 @@ Rollback procedures are unchanged: M5 section above and runbook section 11 (migr
 **Behaviour change to note:** on a brand-new Docker database the backend no longer starts as the owner; provision the roles with migration 005 first (README / runbook section 9). The Phase 1 rollback "switch back to the owner account" is superseded (runbook section 9).
 
 **Activation (owner):** rebuild the backend with the secrets file (`docker compose --env-file <secrets file> up -d --build --no-deps backend`); it must start as `onboardai_app`. Store backups outside the repository or keep them in the ignored `backups/` folder with owner-only access.
+
+---
+
+## Azure OpenAI Integration - GPT-4.1 replaces Groq (24 November 2026)
+
+**Status: IMPLEMENTED, EVALUATED AND ACTIVATED on the local Docker stack (backend rebuilt with the external secrets file); NOT COMMITTED.** Baseline: commit `445ffce`. Azure OpenAI is the only LLM provider. Azure hosting, managed PostgreSQL, HTTPS and Key Vault remain pending; no new Azure resources were created. Live PostgreSQL records (14/0/1/7/1 messages/feedback/escalations/completed tasks/accounts before and after), both Docker volumes and the read-only FAISS index were preserved; a verified backup was taken before the rebuild (`backups/onboardai_20261124_094429.dump`, 13 tables).
+
+### Implemented
+
+| Area | Change |
+|---|---|
+| LLM client | `backend/services/llm.py`: OpenAI Python SDK (pinned 3.57.0, unchanged) against the resource's v1 endpoint, **Responses API** (`client.responses.create`): `model` = deployment `gpt-4.1`, system prompt as `instructions`, retrieved passages wrapped as untrusted context in `input`, `temperature=0`, `max_output_tokens=600`, **`store=False`**; no dated api-version. Endpoint normalised to `https://<resource>/openai/v1/` (https only; no credentials, query or deployment paths) |
+| Failure handling | 30 s timeout, 2 SDK retries; missing/invalid configuration -> `LLMUnavailable` before any request (chat 503; mixed questions keep the records part); provider errors -> type + HTTP status only (no key, endpoint or body); Azure content filter on the prompt (HTTP 400 `content_filter`) and incomplete responses -> standard fallback |
+| Indirect prompt-injection screen (E01) | `guardrails.screen_passages`: sentences in retrieved text that address the AI system (override the rules, reveal prompt/keys/credentials, "reply only with", role/instruction markers) are removed before the prompt is built; the remaining policy text of the passage is kept, a passage left without content is dropped (cannot be cited). Applied in `rag.answer_policy` (before the retrieval gate) and again in `llm.generate_answer`. Logged as counts only. Zero false positives on all 78 knowledge-base texts (raw Markdown, PDF pages, PDF chunks, index chunks and contexts); the index is never modified. Azure content filters stay enabled |
+| Configuration | `AZURE_OPENAI_ENDPOINT` (alias `AZURE_OPENAI_BASE_URL`), `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_KEY`, `LLM_TIMEOUT_SECONDS`/`LLM_MAX_RETRIES`/`LLM_MAX_OUTPUT_TOKENS`; Groq settings removed; `docker-compose.yml` passes the Azure values from the external secrets file (`--env-file`) |
+| Guardrails / evaluation | Leak check covers `azure_openai_api_key` and OpenAI-style key shapes; `rag_eval`, `hybrid_eval`, `run_test_questions` report the Azure deployment |
+| Unchanged | FAISS retrieval and versioned index, canonical PDF and page citations, PostgreSQL and migrations, hybrid SQL + RAG orchestration (employee records never reach the LLM), authentication, RBAC, CSRF, RLS, checklist/status/leave, chat history, feedback, escalation |
+
+### Verification (24 November 2026)
+
+| Check | Result |
+|---|---|
+| Backend suite (local venv) | **624 passed** (568 + 24 `test_azure_llm.py` + 32 `test_injection_screen.py`); 7 existing tests moved from Groq to Azure fakes; 2 prompt-construction tests updated because the injected passage is now removed before the prompt (they still assert that retrieved text never enters the system instructions and that forged wrapper tags are neutralised, and now also that the injected instruction is absent) |
+| PostgreSQL suites (disposable server) / frontend | **125 passed** / 11/11 tests, lint clean, build OK |
+| RAG evaluation, Azure GPT-4.1 (`docs/rag_eval_report.md`) | **50/50**: index 6/6, retrieval 17/17 (MRR 0.971), grounding 17/17, unknown questions 7/7, prompt injection **3/3** (E01 was FAIL before the screen: Azure's content filter rejected the poisoned prompt, HTTP 400 `content_filter`; now the instruction is removed and the salary question is answered from [Handbook 3]) |
+| Held-out evaluation, Azure GPT-4.1 (`docs/azure_eval_report.md`) | routing 62/62; records 26/26; unauthorized refused 8/8, 0 leak markers; retrieval hit 30/30 (MRR 0.978); grounded 30/30, 0 false fallbacks; citation hit 30/30, precision 1.00; mixed 10/10; out-of-scope fallback 6/6; 0 errors. Latency p50/p95/max ms: records 108/157/219, handbook 1,369/2,322/2,510, mixed 1,525/2,202/2,202 |
+| Inside the rebuilt backend container (live stack) | 11/11: Azure settings present; app role `onboardai_app` (not superuser/BYPASSRLS); real GPT-4.1 request 3.0 s; cab question -> `handbook.pdf` p. 3; out-of-scope -> fallback; E01 passes; forced 0.001 s timeout -> `APITimeoutError` after 1.6 s including 2 retries; invalid key -> `AuthenticationError (HTTP 401)` 0.3 s; unknown deployment -> `NotFoundError (HTTP 404)` 0.4 s; missing key -> fail closed without a request; no key in any message |
+| Functional, through nginx, on a temporary clone of the live database with the rebuilt images (live records untouched) | **27/27**: unauthenticated 401; generic invalid-login 401; HttpOnly/SameSite=Strict cookie; checklist read, CSRF-less update 403, update with CSRF; onboarding status and sick-leave balance match the records; EMP001 -> EMP002 data and history 403; third-party question refused; grounded policy answer with p. 3; out-of-scope fallback; mixed answer; feedback; escalation (idempotent); cross-employee feedback/escalation 403; history state; security headers; docs 404; backend with an invalid Azure key -> 503 generic message and mixed answers keep the records part |
+| Logs | Live backend and clone backends: 0 tracebacks, 0 secrets, 0 endpoint mentions; failures logged as `Azure OpenAI request failed: AuthenticationError (HTTP 401)` |
+| Containers (live) | backend, frontend, db healthy; `/` 200, `/api/health` 200, `/api/docs` 404, unauthenticated `/api/employees/EMP001` 401 |
+
+### Rollback
+
+Rebuild the backend from `445ffce` with the previous `.env` (Groq); no database or index change is involved. Backup: `backups/onboardai_20261124_094429.dump` (runbook section 12).
+
+### Remaining limitations
+
+- The injection screen is pattern-based: it removes known instruction shapes; a novel paraphrase could pass it, in which case the system prompt, Azure's content filter (which blocks such prompts and yields the fallback) and output validation (citations, numbers, e-mails, leak check) remain. The current knowledge base is synthetic and contains no such text.
+- Authenticated functional checks ran on a clone with the rebuilt images, not with the owner's live account (no live records or accounts were created); a short manual browser check on the live stack remains advisable.
+- API-key authentication from a local secrets file; Key Vault / managed identity (Entra ID) pending with Azure hosting. Synthetic handbook text and user questions are sent to Azure; `store=False` disables stored responses.
+- Evaluation is a single run (62 + 50 questions); GitHub CI has not run on these changes yet (not pushed).
