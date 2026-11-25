@@ -1,0 +1,306 @@
+# OnboardAI continuous delivery to the existing Azure deployment (manual, approval-gated, main branch only).
+#
+#   1. gate     - main branch, explicit confirmation, successful CI run for this exact commit.
+#   2. build    - no Azure access: FAISS index rebuilt from data/raw and validated (retrieval evaluation), both
+#                 production images built from deploy/azure/*.Dockerfile, smoke-checked, scanned (Trivy: fixable
+#                 HIGH/CRITICAL vulnerabilities and embedded secrets), exported for the release job.
+#   3. release  - GitHub environment "production" (required reviewer), Azure OIDC as a user-assigned managed identity
+#                 (AcrPush on the registry, Website Contributor on the two Web Apps - nothing else); pushes the scanned
+#                 images under unique commit-SHA tags, records digests, deploys backend then frontend through ARM,
+#                 verifies health and the 8 public production checks, and rolls BOTH apps back to the previous
+#                 images if anything fails.
+# Database migrations are NOT part of CD (manual in-VNet procedure, deploy/azure/65-Migrate-Database-InVNet.ps1).
+# No long-lived Azure credential, no publish profile, no SCM/FTP basic auth, no app-setting reads or writes.
+name: CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to release the selected main commit to production'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: onboardai-production
+  cancel-in-progress: false      # never interrupt a running release or rollback
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Pinned by digest (same version used for the 24 Nov 2026 image scans).
+  TRIVY_IMAGE: aquasec/trivy@sha256:5c59e08f980b5d4d503329773480fcea2c9bdad7e381d846fbf9f2ecb8050f6b
+
+jobs:
+  gate:
+    name: Release gate (main, confirmation, CI passed for this commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Main branch and explicit confirmation only
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::Production releases run from main only (got $GITHUB_REF)."; exit 1; }
+          [ "$CONFIRM" = "deploy" ] || { echo "::error::Confirmation input must be exactly: deploy"; exit 1; }
+          echo "Release candidate: $GITHUB_SHA"
+      - name: Successful CI run for this exact commit on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          n=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=main&event=push&status=success" --jq '.total_count')
+          echo "successful CI runs for $GITHUB_SHA on main: $n"
+          [ "$n" -ge 1 ] || { echo "::error::No successful CI run (push to main) for $GITHUB_SHA. Wait for CI to pass, then re-run."; exit 1; }
+
+  build:
+    name: Build, validate and scan production images (no Azure access)
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      backend_id: ${{ steps.images.outputs.backend_id }}
+      frontend_id: ${{ steps.images.outputs.frontend_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Build tag (commit SHA + run id + attempt; never reused)
+        id: meta
+        run: echo "tag=${GITHUB_SHA::12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Install pinned runtime dependencies
+        run: python -m pip install -r requirements.txt && python -m pip check
+      - name: Rebuild the FAISS index from the canonical handbook (data/raw)
+        run: python -m backend.services.ingest
+      - name: Validate the index (availability + retrieval relevance, no LLM, no database writes)
+        run: python -m scripts.rag_eval --no-llm
+      - name: Build production images (deploy/azure Dockerfiles; the backend build verifies index, model and documents)
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          docker build -f deploy/azure/backend.Dockerfile -t "onboardai-backend:${{ steps.meta.outputs.tag }}" .
+          docker build -f deploy/azure/frontend.Dockerfile -t "onboardai-frontend:${{ steps.meta.outputs.tag }}" .
+      - name: Smoke checks (non-root, no dev tools, no secrets files or dumps; any execution failure fails the step)
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          uid=$(docker run --rm "onboardai-backend:$TAG" id -u)
+          [ "$uid" = 10001 ] || { echo "::error::backend runs as uid '$uid' (expected 10001)"; exit 1; }
+          docker run --rm "onboardai-backend:$TAG" python -c "import importlib.util, sys; dev = [m for m in ('pytest', 'locust') if importlib.util.find_spec(m)]; print('dev tools:', dev); sys.exit(1 if dev else 0)"
+          for img in "onboardai-backend:$TAG" "onboardai-frontend:$TAG"; do
+            # Image-wide: env files, dumps, databases (as 30-Publish-Images.ps1). Keys/certificates: application paths only
+            # (the OS CA bundle legitimately contains *.pem files). find's own "no such path" status is tolerated inside
+            # the container; a failed `docker run` fails the step (set -e), and the scan must report completion.
+            out=$(docker run --rm --entrypoint sh "$img" -c "find / -xdev \( -name '*.env' -o -name '.env*' -o -name '*.dump' -o -name '*.db' \) -not -path '/proc/*' 2>/dev/null; for d in /app /etc/nginx /usr/share/nginx; do [ -d \$d ] && find \$d \( -name '*.pem' -o -name '*.key' \); done; echo SCAN_COMPLETE")
+            [ "$(printf '%s\n' "$out" | tail -n 1)" = SCAN_COMPLETE ] || { echo "::error::$img file scan did not complete"; exit 1; }
+            found=$(printf '%s\n' "$out" | sed '$d')
+            [ -z "$found" ] || { echo "::error::$img contains forbidden files: $found"; exit 1; }
+            echo "$img: no secrets files, dumps or databases"
+          done
+      - name: Vulnerability scan (Trivy; fails on fixable HIGH/CRITICAL)
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for img in "onboardai-backend:$TAG" "onboardai-frontend:$TAG"; do
+            echo "== $img"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+              --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$img"
+          done
+      - name: Secret scan (Trivy; ANY detected secret, every severity, blocks the release)
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for img in "onboardai-backend:$TAG" "onboardai-frontend:$TAG"; do
+            echo "== $img"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+              --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 1 --no-progress "$img"
+          done
+      - name: Record image ids and export the scanned images
+        id: images
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "backend_id=$(docker image inspect "onboardai-backend:$TAG" --format '{{.Id}}')" >> "$GITHUB_OUTPUT"
+          echo "frontend_id=$(docker image inspect "onboardai-frontend:$TAG" --format '{{.Id}}')" >> "$GITHUB_OUTPUT"
+          docker save "onboardai-backend:$TAG" "onboardai-frontend:$TAG" | gzip -1 > images.tar.gz
+          ls -lh images.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scanned-images
+          path: images.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  release:
+    name: Release to production (approval, OIDC, deploy, verify, rollback on failure)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+    permissions:
+      contents: read
+      id-token: write          # GitHub OIDC token for the Azure federated credential; nothing else
+    env:
+      AZ_RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZ_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ACR: ${{ vars.AZURE_ACR_LOGIN_SERVER }}
+      BACKEND_APP: ${{ vars.BACKEND_APP }}
+      FRONTEND_APP: ${{ vars.FRONTEND_APP }}
+      TAG: ${{ needs.build.outputs.tag }}          # local name of the scanned images (from the build job)
+      HELPER: deploy/azure/cd-release.sh
+    steps:
+      - name: Check configuration and hide environment identifiers in logs
+        run: |
+          for v in AZ_RG AZ_SUB ACR BACKEND_APP FRONTEND_APP; do [ -n "${!v}" ] || { echo "::error::Environment variable for $v is not set (see deploy/azure/README.md, CD)"; exit 1; }; done
+          echo "::add-mask::$AZ_SUB"; echo "::add-mask::$AZ_RG"; echo "::add-mask::$ACR"
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: scanned-images
+      - name: Load exactly the scanned images
+        run: |
+          set -euo pipefail
+          gunzip -c images.tar.gz | docker load
+          [ "$(docker image inspect "onboardai-backend:$TAG" --format '{{.Id}}')" = "${{ needs.build.outputs.backend_id }}" ]
+          [ "$(docker image inspect "onboardai-frontend:$TAG" --format '{{.Id}}')" = "${{ needs.build.outputs.frontend_id }}" ]
+          rm -f images.tar.gz
+          echo "image ids match the scanned build"
+      - name: Azure sign-in (OIDC, user-assigned managed identity; no stored credential)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true     # the identity has resource-scoped roles only
+      - name: Capture current production images and configuration (rollback point)
+        id: before
+        run: |
+          set -euo pipefail
+          be=$(bash "$HELPER" image "$BACKEND_APP"); fe=$(bash "$HELPER" image "$FRONTEND_APP")
+          if [ -z "$be" ] || [ -z "$fe" ]; then echo "::error::Could not read the current images."; exit 1; fi
+          {
+            echo "backend_image=$be"; echo "frontend_image=$fe"
+            echo "frontend_url=https://$(bash "$HELPER" host "$FRONTEND_APP")"
+            echo "backend_url=https://$(bash "$HELPER" host "$BACKEND_APP")"
+          } >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/cd"
+          bash "$HELPER" snapshot "$BACKEND_APP" "$RUNNER_TEMP/cd/backend.before.json"
+          bash "$HELPER" snapshot "$FRONTEND_APP" "$RUNNER_TEMP/cd/frontend.before.json"
+          echo "previous backend: ${be##*/}"; echo "previous frontend: ${fe##*/}"
+      - name: Production healthy before the release
+        run: bash "$HELPER" wait-healthy "${{ steps.before.outputs.frontend_url }}" 120
+      - name: Push the scanned images (unique tags, never overwritten) and record digests
+        id: push
+        run: |
+          set -euo pipefail
+          # Registry tag from THIS attempt: re-running only the release job reuses the build outputs, so the build tag
+          # alone could collide with an earlier attempt's push.
+          rtag="${GITHUB_SHA::12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "release_tag=$rtag" >> "$GITHUB_OUTPUT"
+          bash "$HELPER" acr-login "$ACR"
+          for c in backend frontend; do
+            remote="$ACR/onboardai-$c:$rtag"
+            if docker manifest inspect "$remote" >/dev/null 2>&1; then echo "::error::$remote already exists; tags are immutable."; exit 1; fi
+            docker tag "onboardai-$c:$TAG" "$remote"
+            docker push --quiet "$remote"
+            digest=$(docker image inspect "$remote" --format '{{join .RepoDigests "\n"}}' | grep "^$ACR/onboardai-$c@" | head -1 | cut -d@ -f2)
+            [ -n "$digest" ] || { echo "::error::No registry digest for $c"; exit 1; }
+            echo "${c}_image=$remote" >> "$GITHUB_OUTPUT"; echo "${c}_digest=$digest" >> "$GITHUB_OUTPUT"
+            echo "$c: onboardai-$c:$rtag @ $digest"
+          done
+      - name: Deploy backend (ARM sitecontainer update)
+        id: deploy_backend
+        run: bash "$HELPER" set-image "$BACKEND_APP" "${{ steps.push.outputs.backend_image }}" 8000
+      - name: Verify backend through the frontend (bounded)
+        run: bash "$HELPER" wait-healthy "${{ steps.before.outputs.frontend_url }}" 600
+      - name: Deploy frontend (ARM sitecontainer update)
+        id: deploy_frontend
+        run: bash "$HELPER" set-image "$FRONTEND_APP" "${{ steps.push.outputs.frontend_image }}" 80
+      - name: Verify frontend and backend (bounded)
+        run: bash "$HELPER" wait-healthy "${{ steps.before.outputs.frontend_url }}" 600
+      - name: Settings, identities, networking and security unchanged (only the image differs)
+        run: |
+          set -euo pipefail
+          bash "$HELPER" snapshot "$BACKEND_APP" "$RUNNER_TEMP/cd/backend.after.json"
+          bash "$HELPER" snapshot "$FRONTEND_APP" "$RUNNER_TEMP/cd/frontend.after.json"
+          bash "$HELPER" compare "$RUNNER_TEMP/cd/backend.before.json" "$RUNNER_TEMP/cd/backend.after.json"
+          bash "$HELPER" compare "$RUNNER_TEMP/cd/frontend.before.json" "$RUNNER_TEMP/cd/frontend.after.json"
+      - name: Production verification (8 public checks; 9 signed-in checks only with an owner-approved secret)
+        shell: pwsh
+        env:
+          VERIFY_EMAIL: ${{ vars.VERIFY_EMPLOYEE_EMAIL }}
+          VERIFY_PW: ${{ secrets.VERIFY_EMPLOYEE_PASSWORD }}
+        run: |
+          $verify = @{ BaseUrl = '${{ steps.before.outputs.frontend_url }}'; BackendUrl = '${{ steps.before.outputs.backend_url }}' }
+          if ($env:VERIFY_EMAIL -and $env:VERIFY_PW) { $verify.EmployeeEmail = $env:VERIFY_EMAIL; $verify.PasswordEnv = 'VERIFY_PW' }
+          else { Write-Host 'Signed-in checks not run in CD (no approved test credential); the owner runs them locally (deploy/azure/README.md).' }
+          ./deploy/azure/70-Verify-Deployment.ps1 @verify      # exits 1 on any failed check; a throw also fails the step
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }             # null after a successful run (the script only exits on failure)
+      - name: Roll back BOTH apps to the previous images
+        id: rollback
+        # Only when a production image update was attempted (the backend update step ran, successfully or not - this
+        # includes a partial failure inside it and any later failure). Failures before that leave production untouched.
+        if: >-
+          failure() && steps.before.outcome == 'success' &&
+          (steps.deploy_backend.outcome == 'success' || steps.deploy_backend.outcome == 'failure')
+        env:
+          PREV_BE: ${{ steps.before.outputs.backend_image }}
+          PREV_FE: ${{ steps.before.outputs.frontend_image }}
+          URL: ${{ steps.before.outputs.frontend_url }}
+          BE_URL: ${{ steps.before.outputs.backend_url }}
+        run: |
+          set -uo pipefail
+          echo "::warning::Release failed after a production image update - rolling back both apps to the previous images."
+          rc=0
+          [ "$(bash "$HELPER" image "$BACKEND_APP")" = "$PREV_BE" ] || bash "$HELPER" set-image "$BACKEND_APP" "$PREV_BE" 8000 || rc=1
+          [ "$(bash "$HELPER" image "$FRONTEND_APP")" = "$PREV_FE" ] || bash "$HELPER" set-image "$FRONTEND_APP" "$PREV_FE" 80 || rc=1
+          # Verify: exact previous image references, configuration identical to the pre-release snapshot, health, public checks.
+          now_be=$(bash "$HELPER" image "$BACKEND_APP" || true); now_fe=$(bash "$HELPER" image "$FRONTEND_APP" || true)
+          if [ "$now_be" = "$PREV_BE" ] && [ "$now_fe" = "$PREV_FE" ]; then echo "previous image references restored"; else echo "::error::image references after rollback differ from the recorded previous images"; rc=1; fi
+          for app in backend frontend; do
+            name=$BACKEND_APP; [ "$app" = frontend ] && name=$FRONTEND_APP
+            if ! bash "$HELPER" snapshot "$name" "$RUNNER_TEMP/cd/$app.rollback.json"; then rc=1
+            elif ! bash "$HELPER" compare "$RUNNER_TEMP/cd/$app.before.json" "$RUNNER_TEMP/cd/$app.rollback.json"; then rc=1; fi
+          done
+          bash "$HELPER" wait-healthy "$URL" 600 || rc=1
+          pwsh -NoProfile -File ./deploy/azure/70-Verify-Deployment.ps1 -BaseUrl "$URL" -BackendUrl "$BE_URL" || rc=1
+          if [ $rc -eq 0 ]; then echo "ROLLBACK VERIFIED: previous images serving and healthy."; else echo "::error::ROLLBACK NEEDS ATTENTION (see deploy/azure/README.md, rollback)."; fi
+          echo "rollback_ok=$([ $rc -eq 0 ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+          exit 1
+      - name: Release evidence (job summary; identifiers masked)
+        if: always() && steps.before.outcome == 'success'
+        env:
+          PREV_BE: ${{ steps.before.outputs.backend_image }}
+          PREV_FE: ${{ steps.before.outputs.frontend_image }}
+        run: |
+          {
+            echo "## OnboardAI release ${{ steps.push.outputs.release_tag || 'not published' }}"
+            echo "| Item | Value |"; echo "|---|---|"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Approved run | $GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT) by @$GITHUB_ACTOR |"
+            echo "| Backend image | \`onboardai-backend:${{ steps.push.outputs.release_tag }}\` @ \`${{ steps.push.outputs.backend_digest }}\` |"
+            echo "| Frontend image | \`onboardai-frontend:${{ steps.push.outputs.release_tag }}\` @ \`${{ steps.push.outputs.frontend_digest }}\` |"
+            echo "| Production updated | ${{ (steps.deploy_backend.outcome == 'success' || steps.deploy_backend.outcome == 'failure') && 'yes (image update attempted)' || 'no (failed before any production change)' }} |"
+            echo "| Previous backend | \`${PREV_BE##*/}\` |"
+            echo "| Previous frontend | \`${PREV_FE##*/}\` |"
+            echo "| Job status | ${{ job.status }} |"
+            echo "| Rollback | ${{ steps.rollback.outcome == 'skipped' && 'not needed' || format('performed, verified={0}', steps.rollback.outputs.rollback_ok) }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -333,3 +333,26 @@ Get-Content $secrets | Where-Object { $_ -match '^AZURE_OPENAI_' } | ForEach-Obj
 python -m scripts.hybrid_eval --report docs/azure_eval_report.md
 python -m scripts.rag_eval
 ```
+
+## 14. Production releases (GitHub Actions CD)
+
+**Status:** implemented 25 November 2026, not yet executed. Design, identity and GitHub configuration: [deploy/azure/README.md, section 8](../deploy/azure/README.md#8-continuous-delivery-github-actions).
+
+**Release:** merge `dev` into `main` -> wait for CI on `main` to pass -> Actions -> **CD** -> Run workflow (branch `main`, `confirm` = `deploy`) -> after the `build` job passes, approve the `production` deployment -> check the job summary (commit, image tags and digests, previous images). Then run the 9 signed-in checks locally (unless the owner approved a test credential for CD):
+
+```powershell
+$env:VERIFY_PW = '<test employee password>'
+.\deploy\azure\70-Verify-Deployment.ps1 -BaseUrl https://<frontend host> -BackendUrl https://<backend host> -EmployeeEmail <email> -PasswordEnv VERIFY_PW
+Remove-Item Env:VERIFY_PW
+```
+
+| Symptom | Meaning | Action |
+|---|---|---|
+| `gate` fails: "No successful CI run" | CI for this main commit has not passed (or is still running) | Wait for CI / fix it, then re-run CD |
+| `build` fails in the index validation | the knowledge base or index no longer meets the retrieval checks | Fix `data/raw` or ingestion; nothing was deployed |
+| `build` fails in Trivy | a fixable HIGH/CRITICAL CVE or an embedded secret | Rebuild later (base-image fix) or remove the secret; nothing was deployed |
+| `release` fails before "Deploy backend" | sign-in, registry or pre-release health problem | Production unchanged; check the GitHub environment variables and the role assignments |
+| `release` fails after a deploy step | health, configuration drift or public checks failed | Automatic rollback of both apps; the step prints `ROLLBACK VERIFIED` or `ROLLBACK NEEDS ATTENTION` |
+| `ROLLBACK NEEDS ATTENTION` | the previous images did not come back healthy | `.\deploy\azure\90-Rollback.ps1 -PreviousTag <previous tag> -Execute -VerifyBaseUrl https://<frontend host>`; check App Service logs (Diagnose and solve problems) |
+
+**Never** run database migrations from CD; a schema change is released by running the manual in-VNet migration (deploy/azure step 65) before the application release that needs it. Remove the identity's access by deleting its three role assignments (or the federated credential); this stops CD without affecting the running application.

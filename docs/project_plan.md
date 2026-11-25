@@ -2073,3 +2073,107 @@ images (`78b80ee-202611241823`) are unaffected.
 * **Constraints:** B1 plan has no deployment slots (brief restart per deploy, no blue/green); signed-in verification
   needs a dedicated test account password as a GitHub environment secret (or public checks only); sandbox subscription
   lifetime.
+
+---
+
+## Continuous Delivery (GitHub Actions) - Implemented, Not Yet Executed (25 Nov 2026)
+
+**Status: IMPLEMENTED AND VALIDATED LOCALLY; NOT YET EXECUTED.** CD is not operational until a release has been
+deployed and verified by the pipeline (to be recorded here). Base commit `6427fd7` (CI run #8 passed). Owner approval:
+one user-assigned managed identity, OIDC federated credential (repository + protected `production` environment),
+AcrPush on the registry, Website Contributor on each Web App - nothing broader.
+
+### Azure resources created (no cost)
+| Resource | Configuration |
+|---|---|
+| User-assigned managed identity `onboardai-github-cd` (resource group, South India) | tag `purpose=github-actions-cd` |
+| Federated credential `github-production` | issuer `https://token.actions.githubusercontent.com`, subject `repo:<owner>/<repo>:environment:production`, audience `api://AzureADTokenExchange` |
+| Role assignments (3, verified as the only ones) | `AcrPush` on the registry; `Website Contributor` on the backend Web App; `Website Contributor` on the frontend Web App |
+
+No subscription, resource-group, database or network permission; no client secret; no infrastructure modified; the
+running application was not touched (no deployment, no restart).
+
+### Files
+| File | Change |
+|---|---|
+| `.github/workflows/cd.yml` (new) | gate (main, `confirm=deploy`, successful CI for the exact commit) -> build (no Azure access: index rebuild + `rag_eval --no-llm`, Azure Dockerfiles, smoke checks, Trivy vuln+secret scan pinned by digest, image export) -> release (environment `production`, OIDC, image-id check, rollback point + configuration snapshot, pre-release health, unique `<sha12>-<run id>` tags never overwritten, digests, ARM sitecontainer update backend then frontend, bounded health, configuration-drift check, 8 public checks, automatic rollback of both apps with re-verification, job-summary evidence with masked identifiers); concurrency `onboardai-production` without cancellation |
+| `deploy/azure/cd-release.sh` (new) | ACR sign-in by Entra token exchange (AcrPush only), image/host lookup, configuration snapshot/compare (everything except the image; app-setting values never read), image update, bounded health wait |
+| `deploy/azure/70-Verify-Deployment.ps1` | runs on PowerShell 7 (GitHub runners): `-SkipHttpErrorCheck` on 7+, untyped catch (Windows PowerShell 5.1 path unchanged) |
+| `tests/unit/test_cd_workflow.py` (new) | 10 static checks: manual trigger only, no concurrent releases, least-privilege token, CI gate, approval environment, OIDC without stored credentials, validation + scan before publishing, rollback + verification, no database/migration access, helper never reads secrets or weakens access |
+| `README.md`, `docs/architecture.md` (CI/CD diagram), `deploy/azure/README.md` (section 8), `docs/runbook.md` (section 14) | CD documented as implemented, not yet executed |
+
+### Validation
+| Check | Result |
+|---|---|
+| Backend suite (Docker, Python 3.12) | **711 passed** (701 + 10 CD checks), 133 PostgreSQL tests skipped (no disposable server; unchanged) |
+| actionlint 1.7.7 (incl. shellcheck) on `cd.yml`; shellcheck on `cd-release.sh` | 0 findings (CI workflow untouched; its one pre-existing shellcheck warning left as is) |
+| `70-Verify-Deployment.ps1` public checks against production | **8/8 on PowerShell 7.4 (Linux)** and **8/8 on Windows PowerShell 5.1**; unreachable host -> clean FAIL, exit 1 |
+| Index gate `scripts.rag_eval --no-llm` (test image) | index 6/6, retrieval 17/17, MRR 0.971, exit 0 |
+| Trivy gate on the current production images | backend 0, frontend 0 fixable HIGH/CRITICAL; no secrets |
+| Smoke checks on the current production images | non-root (10001), no dev tools, no env/dump/db/key files |
+| Helper Azure queries (read-only, operator account) | image, host and configuration fields returned as expected |
+| `Test-DeploymentScripts.ps1` | 0 failures |
+| Secret scan (184 files x 17 values incl. client/tenant ids) | 0 hits |
+
+Bugs found and fixed during validation: (1) the PowerShell 7 verification step treated a successful run as failed
+(`$LASTEXITCODE` is null after success) and would have rolled back every release; (2) the image smoke check matched the
+Alpine CA bundle (`*.pem`) and would have blocked every release; (3) PowerShell 7 throws on 4xx (fixed with
+`-SkipHttpErrorCheck`); (4) a typed catch for PowerShell 7 broke Windows PowerShell 5.1 (untyped catch).
+Not exercised locally: the jq-based parts of the helper (jq not installed here; preinstalled on GitHub runners) and the
+OIDC sign-in (only possible from GitHub) - both are first exercised by the first CD run, which fails safe before
+any production change if they do not work.
+
+### Next (owner)
+GitHub environment `production` (required reviewer, `main` only) and its variables; merge `dev` into `main`; CI on
+`main`; first CD run; record the result here.
+
+---
+
+## Final Architecture Diagram (25 Nov 2026)
+
+`docs/architecture-final.png` (owner-provided, 1672 x 941) embedded with relative paths in `docs/architecture.md`
+(new section "Architecture overview") and in the `README.md` Architecture section, captioned as a conceptual overview
+that links to the authoritative sections. The historical `docs/architecture.png` and all Mermaid diagrams are kept.
+
+**Technical review of the diagram against the implementation** (reported to the owner; the image was not edited):
+
+| # | Diagram | Actual implementation | Severity |
+|---|---|---|---|
+| 1 | Azure PostgreSQL "(Private Endpoint)" | VNet injection (delegated `postgres-subnet`, private DNS zone, public access disabled); the private endpoint belongs to the **backend Web App** | High |
+| 2 | Frontend and backend both inside the VNet, user HTTPS into the "Application Layer" | Frontend is the only public endpoint (VNet integration is outbound only); backend public access is disabled and it is reached only through its private endpoint; the backend private endpoint and private DNS are not shown | High |
+| 3 | Azure OpenAI inside the VNet | Public Azure OpenAI endpoint over HTTPS (API key); only retrieved passages and the question are sent | Medium |
+| 4 | Ingestion "PyMuPDF + OCR fallback" | `pypdf` text extraction; no OCR | Medium |
+| 5 | Chunking "Page-based, ~12k tokens" | page + numbered-heading sections, 2-sentence retrieval windows with section context (350-word split for long sections) | Medium |
+| 6 | Embeddings "Sentence Transformers" | `fastembed` (ONNX) with `BAAI/bge-small-en-v1.5` | Medium |
+| 7 | CD "rollback (planned)" | rollback is implemented in `cd.yml` (automatic, both apps, re-verified); CD as a whole is implemented but not yet executed; approval gate and OIDC managed identity not shown | Medium |
+| 8 | Agents A1-A4 and "Request Classifier" | deterministic, rule-based router and orchestrator (no LLM agents, no generated SQL); the LLM is used only for handbook answers; "status" covers checklist, leave, assets, tickets, profile and payroll calendar via allow-listed queries | Low (wording) |
+| 9 | CI "security scan" | CI runs tests incl. the live PostgreSQL security suite; the image vulnerability/secret scan (Trivy) is in CD | Low |
+| 10 | Guardrails "PII control, compliance" | retrieval gate, injection screening, output validation (no secret/system-prompt leakage, valid citations, no unsupported numbers/emails); employee records never reach the LLM | Low |
+| 11 | RAG pipeline linked to the Data Layer | FAISS index and documents are files baked into the backend image; PostgreSQL holds HR records, accounts, sessions, chat history, feedback/escalations, rate limiting | Low |
+
+Correct in the diagram: App Service hosting (React + nginx, FastAPI), Azure OpenAI GPT-4.1, FAISS with 65 chunks,
+HR/IT escalation with human review, PostgreSQL contents, GitHub -> CI -> CD -> ACR flow, image pull into Azure.
+The CI/CD text in `docs/architecture.md` stays "implemented, not yet executed" until the first CD release is verified.
+
+---
+
+## CD Review Fixes Before First Commit (25 Nov 2026)
+
+Owner review of the CD workflow: design approved; GitHub environment `production` configured (required reviewer,
+administrator bypass disabled, `main` only, seven variables). Six essential fixes applied (CD still **not yet executed**):
+
+| # | Fix | Where |
+|---|---|---|
+| 1 | Image tags include the run attempt: build tag `<sha12>-<run id>-<attempt>`; the registry tag is computed in the release attempt, so re-running only the release job cannot collide with an earlier push | `cd.yml` build + release |
+| 2 | Separate Trivy scans: vulnerabilities (`--scanners vuln`, fixable HIGH/CRITICAL) and secrets (`--scanners secret`, every severity UNKNOWN-CRITICAL) - any detected secret blocks the release | `cd.yml` build |
+| 3 | Smoke checks fail safely: no `|| true`; a failed `docker run` fails the step (`set -euo pipefail`), the file scan must print a completion marker, the uid is compared explicitly | `cd.yml` build |
+| 4 | Rollback only when a production image update was attempted (backend update step ran, succeeded or failed - covers partial failures and any later failure); earlier failures leave production untouched; the job summary states whether production was updated | `cd.yml` release |
+| 5 | Rollback verification: exact previous image references, configuration snapshot identical to the pre-release snapshot, bounded health, 8 public checks; result `ROLLBACK VERIFIED` / `ROLLBACK NEEDS ATTENTION` | `cd.yml` release |
+| 6 | Health requires `/api/health` HTTP 200 AND JSON `status` ok and `database` ok (plus frontend `/healthz` 200), 3 consecutive probes | `deploy/azure/cd-release.sh` |
+
+Validation (relevant checks only): actionlint 1.7.7 on `cd.yml` and shellcheck on `cd-release.sh` - 0 findings;
+`tests/unit/test_cd_workflow.py` - **12 passed** (10 updated + 2 new: attempt tags, health rule); all-severity
+Trivy secret scan on the current production images - 0 secrets (backend and frontend); new smoke check on both
+images - completed, nothing found; failure path - a failed `docker run` stops the step (exit 125); live probe -
+`/api/health` 200 with healthy JSON, `/api/ready` 404 not counted as healthy. Documentation: `README.md`,
+`deploy/azure/README.md` (section 8), `docs/architecture.md` (CI/CD diagram).

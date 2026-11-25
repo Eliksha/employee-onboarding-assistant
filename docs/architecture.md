@@ -2,6 +2,12 @@
 
 Current architecture (updated 25 November 2026), including local email/password authentication. The application is deployed on Azure (App Service, private PostgreSQL Flexible Server, Azure OpenAI) and verified in production; see [Deployment view (Azure)](#deployment-view-azure). The local Docker Compose stack remains the development and rehearsal environment.
 
+## Architecture overview
+
+![OnboardAI end-to-end architecture on Azure: user, App Service frontend and backend, agent orchestration with guardrails and human review, RAG pipeline, Azure OpenAI GPT-4.1, PostgreSQL data layer, and GitHub CI/CD with Azure Container Registry](architecture-final.png)
+
+*Conceptual overview of the final solution (25 November 2026). The sections below are the authoritative technical reference: exact network isolation in [Deployment view (Azure)](#deployment-view-azure), the deterministic routing and RAG implementation in [Hybrid chat routing](#hybrid-chat-routing-phase-2) and [Data and knowledge ingestion](#data-and-knowledge-ingestion-m4), and the delivery pipeline in [Delivery pipeline (CI/CD)](#delivery-pipeline-cicd).*
+
 ## System overview
 
 ```mermaid
@@ -197,6 +203,26 @@ flowchart LR
 | Configuration and secrets | App settings of each Web App (encrypted at rest by App Service), set from an external secrets file that is never committed. Azure Key Vault references are a planned improvement. |
 | Health | App Service health checks: backend `/ready` (database and index), frontend `/healthz`. |
 | Data migration | One-time, inside the VNet, over an authenticated SSH tunnel to a temporary migration image; 12/12 table fingerprints identical; all temporary access removed afterwards (see project plan). |
+
+### Delivery pipeline (CI/CD)
+
+CI (`.github/workflows/ci.yml`) runs on every push and pull request. CD (`.github/workflows/cd.yml`) is implemented but **not yet executed**; it is manual and approval-gated:
+
+```mermaid
+flowchart LR
+    dev["Merge to main"] --> ci["CI: backend tests, live PostgreSQL<br/>security suite, frontend, Docker build"]
+    ci -->|"success for this commit"| gate["CD gate<br/>main only, confirm=deploy"]
+    gate --> build["Build job (no Azure access)<br/>rebuild + validate FAISS index,<br/>build images, smoke checks,<br/>separate Trivy scans:<br/>vulnerabilities + secrets"]
+    build --> approve{"Environment 'production'<br/>required reviewer"}
+    approve --> rel["Release job<br/>GitHub OIDC -> managed identity<br/>(AcrPush on ACR, Website Contributor<br/>on the two Web Apps only)"]
+    rel --> push["Push immutable SHA tags,<br/>record digests"]
+    push --> deploy["ARM: backend, then frontend<br/>sitecontainer image update"]
+    deploy --> verify{"Health, unchanged config,<br/>8 public checks"}
+    verify -->|"pass"| done["Release evidence<br/>(job summary)"]
+    verify -->|"fail after an image update"| rb["Roll back both apps to the<br/>recorded images; verify images,<br/>configuration and health"]
+```
+
+The release identity has no database, network or resource-group permission, and the pipeline never uses the SCM/Kudu site, publish profiles or app-setting values. GitHub-hosted runners reach only the ARM API, the registry and the public frontend; the private backend endpoint and the private database are unchanged. Database migrations remain a manual in-VNet procedure.
 
 Local email/password authentication is used in production as in development; an external identity provider (for example Microsoft Entra ID) is a possible later change, not current scope.
 

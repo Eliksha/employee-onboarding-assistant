@@ -56,11 +56,15 @@ function Invoke-Http([string] $Method, [string] $Url, $Body = $null, $Session = 
     $params = @{ Method = $Method; Uri = $Url; UseBasicParsing = $true; TimeoutSec = 90; Headers = $Headers; MaximumRedirection = 0 }
     if ($null -ne $Body) { $params.Body = ($Body | ConvertTo-Json -Compress); $params.ContentType = 'application/json' }
     if ($null -ne $Session) { $params.WebSession = $Session }
+    # PowerShell 7 (GitHub Actions runners): return 4xx/5xx responses instead of throwing HttpResponseException.
+    if ($PSVersionTable.PSVersion.Major -ge 7) { $params.SkipHttpErrorCheck = $true }
     try {
         $r = Invoke-WebRequest @params
-        return [pscustomobject]@{ Status = [int]$r.StatusCode; Headers = $r.Headers; Body = $r.Content }
-    } catch [System.Net.WebException] {
-        $resp = $_.Exception.Response
+        return [pscustomobject]@{ Status = [int]$r.StatusCode; Headers = $r.Headers; Body = [string]$r.Content }
+    } catch {
+        # Untyped catch: System.Net.Http is not loaded in Windows PowerShell 5.1, so a typed catch for PowerShell 7's
+        # HttpRequestException would fail there. Transport errors (no HTTP response) are reported as status 0.
+        $resp = if ($_.Exception -is [System.Net.WebException]) { $_.Exception.Response } else { $null }
         if ($null -eq $resp) { return [pscustomobject]@{ Status = 0; Headers = @{}; Body = $_.Exception.Message } }
         $headers = @{}; foreach ($k in $resp.Headers.AllKeys) { $headers[$k] = $resp.Headers[$k] }
         # Windows PowerShell 5.1 has usually consumed the error body already and exposes it as ErrorDetails.

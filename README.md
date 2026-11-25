@@ -19,7 +19,7 @@ EY GDS capstone project - Domain: Generative AI for Human Resources.
 | Authentication / authorization | Email + password (Argon2id), server-side sessions, CSRF protection, per-employee authorization, admin role - implemented and tested locally |
 | External identity (Microsoft Entra ID / OAuth) | Not implemented (out of scope for now) |
 | Continuous integration (GitHub Actions) | Implemented: backend, live PostgreSQL security suite, frontend and Docker build jobs on every push and pull request |
-| Continuous delivery | **Not implemented yet** (next task); Azure deployment is run manually with the scripts in `deploy/azure/` |
+| Continuous delivery (GitHub Actions) | **Implemented, not yet executed** (`.github/workflows/cd.yml`: manual, main only, CI-gated, approval environment, OIDC, scan, deploy, verify, automatic rollback). Operational after its first successful release |
 
 Detailed progress, decisions and test evidence: [docs/project_plan.md](docs/project_plan.md).
 
@@ -36,6 +36,12 @@ Detailed progress, decisions and test evidence: [docs/project_plan.md](docs/proj
 - **Support Center** - create HR/IT/Payroll tickets and view ticket history.
 
 ## Architecture
+
+![OnboardAI end-to-end architecture on Azure: user, App Service frontend and backend, agent orchestration with guardrails and human review, RAG pipeline, Azure OpenAI GPT-4.1, PostgreSQL data layer, and GitHub CI/CD with Azure Container Registry](docs/architecture-final.png)
+
+*Conceptual overview. Exact network isolation, RAG implementation and CI/CD details: [docs/architecture.md](docs/architecture.md).*
+
+Application request flow:
 
 ```mermaid
 flowchart LR
@@ -81,7 +87,7 @@ data/index/         Versioned FAISS index: versions/<id>/ + ACTIVE pointer (gene
 docker/postgres/    PostgreSQL schema and synthetic seed used by Docker
 scripts/            rag_eval.py, hybrid_eval.py (evaluation), import_csv.py (CSV import), schema_dictionary.py (schema check), run_test_questions.py
 tests/              unit/ and integration/ pytest suites, eval/ (held-out dataset), load/ (locust load test)
-.github/workflows/  ci.yml (tests, security suite, frontend, Docker build; no deployment - CD not implemented yet)
+.github/workflows/  ci.yml (tests, security suite, frontend, Docker build), cd.yml (approval-gated release to Azure)
 docs/               Project plan, architecture, runbook, evaluation and test reports (dated; earlier ones used Groq)
 Dockerfile, docker-compose.yml, .dockerignore, .env.example
 ```
@@ -297,7 +303,7 @@ Install the pinned development tools first: `pip install -r requirements-dev.txt
 
 | Command | What it covers | Latest verified result |
 |---|---|---|
-| `python -m pytest -q` | Unit and integration tests (routing, orchestration, RAG, guardrails, auth, isolation, API, error handling, logging, frontend contract, Docker config, evaluation dataset, CSV import, PDF index, feedback/escalation, security headers). Always uses a temporary SQLite database; PostgreSQL connections are blocked. The real-embedding retrieval tests need the FAISS index (`python -m backend.services.ingest`). | **701 passed** (Python 3.12 Docker test image, 25 Nov 2026, after the submission cleanup; the 133 live-PostgreSQL tests are skipped without a disposable server and run in the next row and in CI) |
+| `python -m pytest -q` | Unit and integration tests (routing, orchestration, RAG, guardrails, auth, isolation, API, error handling, logging, frontend contract, Docker config, evaluation dataset, CSV import, PDF index, feedback/escalation, security headers). Always uses a temporary SQLite database; PostgreSQL connections are blocked. The real-embedding retrieval tests need the FAISS index (`python -m backend.services.ingest`). | **711 passed** (Python 3.12 Docker test image, 25 Nov 2026, including 10 static security checks of the CD workflow; the 133 live-PostgreSQL tests are skipped without a disposable server and run in the next row and in CI) |
 | `ONBOARDAI_PG_TEST_ADMIN_DSN=... python -m pytest tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py tests/integration/test_postgres_m6.py` | Live PostgreSQL roles, RLS, signed scope, isolation attacks, import role, CSV import, schema dictionary, migrations 007 and 008 (HR queue, shared rate limiting) against a **disposable** local server | **133 passed** (24 Nov 2026) |
 | `cd frontend; npm test` / `npm run lint` / `npm run build` | Frontend helper tests, ESLint, production build | **11 passed** / 0 problems / built (M5) |
 | `python -m scripts.hybrid_eval --routing-only` | Held-out routing accuracy (62 questions, deterministic; also a CI regression floor) | **62/62** (M4; 60/62 in M3) |
@@ -306,7 +312,7 @@ Install the pinned development tools first: `pip install -r requirements-dev.txt
 | `bash tests/load/run_isolated_load_test.sh` | Small load test (locust) against a throw-away stack with least-privilege roles; `WITH_EVAL=1` also runs the HTTP evaluation | See [docs/load_test_report.md](docs/load_test_report.md) |
 | `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs the Azure OpenAI settings, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (Azure OpenAI GPT-4.1, 24 Nov 2026; retrieval MRR 0.971) |
 
-**Continuous integration** (`.github/workflows/ci.yml`, on pushes to `dev`/`main`, pull requests and manual runs): backend tests on Python 3.12 with the index built from `data/raw` and a no-skip check; the live PostgreSQL security suite against a disposable `postgres:16-alpine` container with a per-job random password; frontend test/lint/build on Node 24; Docker image builds with smoke checks (pip check, import, no dev tools in the image, non-root user) and `docker compose config`. No deployment, no image push, no real secrets (the LLM is mocked). Latest run: workflow run #7, all jobs passed, for commit `df18ffd` (Azure deployment). Continuous delivery is not implemented yet.
+**Continuous integration** (`.github/workflows/ci.yml`, on pushes to `dev`/`main`, pull requests and manual runs): backend tests on Python 3.12 with the index built from `data/raw` and a no-skip check; the live PostgreSQL security suite against a disposable `postgres:16-alpine` container with a per-job random password; frontend test/lint/build on Node 24; Docker image builds with smoke checks (pip check, import, no dev tools in the image, non-root user) and `docker compose config`. No deployment, no image push, no real secrets (the LLM is mocked). Latest runs: #7 (`df18ffd`, Azure deployment) and #8 (`6427fd7`, submission cleanup), all jobs passed. Continuous delivery (`cd.yml`) is a separate, manual workflow that requires such a successful CI run for the release commit on `main`; it is implemented but not yet executed.
 
 **Production verification on Azure** (`deploy/azure/70-Verify-Deployment.ps1`, 25 Nov 2026): **17/17 passed** (8 public, 9 signed-in), grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms. See [Azure deployment](#azure-deployment).
 
@@ -339,16 +345,18 @@ Deployed on 25 November 2026 to Azure (South India) with the PowerShell scripts 
 
 **Production verification** (`deploy/azure/70-Verify-Deployment.ps1`): 17/17 passed - 8 public checks (health, HSTS/CSP/X-Frame-Options/nosniff, API docs and readiness hidden, sign-in required, generic login error, backend not usable directly) and 9 signed-in checks (secure session cookie, own profile and checklist, other employees' data refused, grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms against a 5000 ms target, out-of-scope fallback, history, sign-out). Migration and deployment evidence: [docs/project_plan.md](docs/project_plan.md).
 
+**Continuous delivery** (`.github/workflows/cd.yml`, implemented 25 Nov 2026, **not yet executed**): a manual run on `main` with confirmation, only for a commit whose CI passed, rebuilds and validates the FAISS index, builds both production images, scans them separately for vulnerabilities (fixable HIGH/CRITICAL block) and secrets (any secret blocks), and - after approval in the protected GitHub environment `production` - signs in to Azure with GitHub OIDC as a dedicated managed identity (`AcrPush` on the registry, `Website Contributor` on the two Web Apps only; no stored credential), pushes immutable tags (commit SHA + run id + attempt), deploys backend then frontend, verifies health (`/api/health` HTTP 200 with healthy JSON), unchanged configuration and the 8 public checks, and - if a production update was attempted and anything fails - rolls both apps back automatically and verifies the previous images, configuration and health. Database migrations stay manual. Details: [deploy/azure/README.md, section 8](deploy/azure/README.md#8-continuous-delivery-github-actions).
+
 Remaining Azure improvements (not implemented):
 
 1. Move secrets from App Service app settings to Azure Key Vault references, and use managed identity / Entra ID authentication for Azure OpenAI and PostgreSQL instead of keys and passwords.
-2. Continuous deployment (CI builds and tests only; deployment is run manually with the scripts).
+2. First execution of the continuous-delivery workflow (implemented; see below). Deployment slots / blue-green releases would need a Standard or higher App Service plan.
 3. Re-validate `SIMILARITY_THRESHOLD`, `BORDERLINE_MARGIN` and `NOT_FOUND` behaviour periodically with real questions.
 4. Decide later whether to keep local accounts or move to an external identity provider (for example Microsoft Entra ID).
 
 ## Known limitations
 
-- Azure deployment is a single instance on a Basic (B1) App Service plan with manual, script-based deployment; secrets are App Service app settings (no Key Vault yet); no WAF in front of the public frontend.
+- Azure deployment is a single instance on a Basic (B1) App Service plan (no deployment slots, so a release restarts the apps briefly); continuous delivery is implemented but not yet executed; secrets are App Service app settings (no Key Vault yet); no WAF in front of the public frontend.
 - Authentication is local email/password only: no MFA, no password reset or self-service password change, no external identity provider, no admin UI (admin actions are API-only).
 - Login rate limiting is shared in PostgreSQL (`login_failures`, migration 008) but held in process memory on the SQLite fallback; a locked email blocks that account for up to 15 minutes (possible nuisance lockout). In Docker the backend port 8000 is also published on localhost while `X-Forwarded-For` is trusted, so a local client could bypass the per-IP limit (the per-email limit still applies).
 - Synthetic, single-company knowledge base (48 chunks); retrieval misses some paraphrased questions (documented in the RAG report).

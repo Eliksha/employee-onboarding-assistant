@@ -162,3 +162,44 @@ Database changes are additive (008); data recovery uses Azure point-in-time rest
 Rotated after the migration to a random value that was not stored; the application does not use the administrator
 login. When administrator access is needed, reset it and keep the new value in the external secrets file only:
 `az postgres flexible-server update --resource-group <rg> --name <server> --admin-password <new value>`.
+
+## 8. Continuous delivery (GitHub Actions)
+
+**Status: implemented (25 Nov 2026), not yet executed.** CD is operational only after its first successful release
+(recorded in `docs/project_plan.md`). Workflow: [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml); helper:
+[`cd-release.sh`](cd-release.sh).
+
+| Job | Runs | What it does |
+|---|---|---|
+| `gate` | always | main branch only; input `confirm` must be `deploy`; a successful CI run (push to main) must exist for the exact commit |
+| `build` | no Azure access | rebuilds the FAISS index from `data/raw` (`python -m backend.services.ingest`), validates it (`scripts.rag_eval --no-llm`: 6 index + 17 retrieval checks), builds both images from `deploy/azure/*.Dockerfile` (the backend build re-verifies index, model and document hashes), smoke checks (non-root, no dev tools, no env/dump/db/key files; a failed check execution fails the job), two separate Trivy scans pinned by digest - vulnerabilities (fixable HIGH/CRITICAL fail) and secrets (any secret of any severity fails) - and exports the scanned images |
+| `release` | environment `production` (required reviewer) | loads exactly the scanned images (image ids compared), OIDC sign-in, records the current images and a configuration snapshot (rollback point), checks production is healthy, pushes under the unique tag `<sha12>-<run id>-<run attempt>` (computed in the release attempt, never overwritten) and records digests, deploys backend then frontend (`az webapp sitecontainers update`, ARM only), bounded health checks (frontend `/healthz` 200 and `/api/health` HTTP 200 with JSON `status` ok and `database` ok, 3 consecutive), proves nothing but the image changed, runs the 8 public checks of `70-Verify-Deployment.ps1`. If anything fails **after a production image update was attempted** (including a failed or partial backend update), both apps are rolled back to the recorded images and the rollback is verified: exact previous image references, configuration identical to the pre-release snapshot, health, and the 8 public checks. A failure before any update leaves production untouched (no rollback) |
+
+Concurrency group `onboardai-production` (no parallel releases, a running release is never cancelled). Database
+migrations are not part of CD (step 65, manual, inside the VNet).
+
+**Identity (created 25 Nov 2026):** user-assigned managed identity `onboardai-github-cd` in the resource group, federated
+credential `github-production` (issuer `https://token.actions.githubusercontent.com`, subject
+`repo:<owner>/<repo>:environment:production`, audience `api://AzureADTokenExchange`). Role assignments, each on one
+resource only: `AcrPush` on the registry, `Website Contributor` on the backend Web App, `Website Contributor` on the
+frontend Web App. No subscription, resource-group, database or network role; no client secret; the registry admin
+user, SCM/FTP basic auth and publish profiles stay disabled; app settings are never read or written.
+
+**GitHub configuration (repository Settings -> Environments -> `production`):** required reviewer (the owner), deployment
+branches: `main` only. Environment variables (identifiers, not secrets): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `AZURE_ACR_LOGIN_SERVER`, `BACKEND_APP`, `FRONTEND_APP`. Optional,
+only with the owner's approval: variable `VERIFY_EMPLOYEE_EMAIL` + secret `VERIFY_EMPLOYEE_PASSWORD` for a dedicated
+test account - otherwise the 9 signed-in checks are run by the owner after each release (section 7).
+
+**Release:** Actions -> CD -> Run workflow -> branch `main`, `confirm` = `deploy` -> approve the `production`
+deployment after `build` has passed. Evidence: the run's job summary (commit, tags, digests, previous images, rollback
+outcome; identifiers masked).
+
+**Rollback:** automatic on failure (both apps, re-verified). Manual, to any earlier image tag:
+`.\deploy\azure\90-Rollback.ps1 -PreviousTag <tag> -Execute -VerifyBaseUrl https://<frontend host>`.
+
+Limitations: the B1 plan has no deployment slots (each release restarts the apps briefly; no blue/green); the
+registry must keep public network access for GitHub-hosted runners (Basic tier, Entra ID authentication only); health
+checks cannot read the running image version, so verification is behavioural (health, public checks, configuration
+snapshot); the vulnerability gate can block a release when a new fixable HIGH/CRITICAL CVE is published (rebuild picks
+up base-image fixes).
