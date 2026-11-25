@@ -393,7 +393,6 @@ Remaining Azure improvements (not implemented):
 ## Documentation
 
 - [docs/submission_evidence.md](docs/submission_evidence.md) - consolidated test, performance, deployment and production-verification evidence (source for the final PDF/PPT)
-- [docs/presentation_script.md](docs/presentation_script.md) - 5-7 minute presentation and live Azure demonstration, with expected questions and answers
 - [docs/project_plan.md](docs/project_plan.md) - milestones, step-by-step progress, test evidence, risks
 - [docs/final_local_test_report.md](docs/final_local_test_report.md) - historical local release test (21 Nov 2026)
 - [docs/runbook.md](docs/runbook.md) - start/stop, health checks, logs, troubleshooting

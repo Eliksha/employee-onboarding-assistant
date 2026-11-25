@@ -2191,9 +2191,10 @@ deployment or Git history was changed; the architecture image `docs/architecture
 |---|---|---|
 | README finalised | `README.md` | live application URL (public frontend), contents line, "Results at a glance" (verified figures only), status rows updated to the Azure deployment, features (mixed questions, safety, HR/IT queue), technology stack incl. Azure services and CI/CD, CI runs #7-#9, documentation index (new documents; historical reports labelled) |
 | Evidence document | `docs/submission_evidence.md` | success criteria vs results, features, automated tests, GPT-4.1 RAG (50/50) and held-out (62 questions) evaluations, performance (production 4232 ms; held-out latency by route; historical local load test labelled), Azure infrastructure, executed deployment steps, in-VNet migration (12/12 fingerprints), 17/17 production verification, security evidence, CI/CD status (CD implemented, not executed), limitations, sources |
-| Presentation + demo | `docs/presentation_script.md` | 5-7 minute timeline, live Azure demo using questions verified with GPT-4.1 (handbook, mixed, unauthorized, out-of-scope, escalation), fallback plan, 15 expected questions with answers |
 | Draft submission ZIP | `..\submission\OnboardAI-submission-20261125-draft.zip` (outside the repository) | 189 files (tracked + new, git-ignore rules), 2.2 MB; excluded: `.git`, `.env`, secrets/config files, dumps, databases, backups, logs, caches, `node_modules`, `dist`, `.venv`, generated index |
 
 ZIP checks: 0 forbidden entries; `.env.example`, both architecture images, CD workflow and new documents present;
 extracted contents scanned against every secrets-file value and Azure identifier (16 values, 186 text files): 0 hits;
 only the public frontend URL appears (intentionally). To be regenerated after the first successful CD release.
+
+**Update (25 Nov 2026):** `docs/presentation_script.md` was removed at the owner's request (not required for submission); its README reference and the row above were removed. `docs/submission_evidence.md` and `docs/architecture-final.png` are unchanged. The draft ZIP still contains the removed file and will be regenerated after the first CD release.
