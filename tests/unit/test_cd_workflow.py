@@ -3,6 +3,7 @@
 No network, no Azure: they keep the release controls (manual trigger, main only, CI gate, approval environment,
 OIDC without stored credentials, scanning, rollback, no database access) from being weakened unnoticed.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,7 @@ def test_all_seven_variables_resolved_and_validated_before_azure_sign_in(wf):
     first = steps[0]
     assert set(first["env"]) == {f"V_{n}" for n in SEVEN_VARS}
     for n in SEVEN_VARS:
-        assert first["env"][f"V_{n}"] == "${{ vars.%s }}" % n
+        assert first["env"][f"V_{n}"] == "${{ secrets.%s || vars.%s }}" % (n, n)   # secret preferred (masked)
         assert n in first["run"]
     assert 'missing+=("$n")' in first["run"] and "exit 1" in first["run"] and "$GITHUB_ENV" in first["run"]
     login = next(i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("azure/login"))
@@ -75,11 +76,13 @@ def test_all_seven_variables_resolved_and_validated_before_azure_sign_in(wf):
 
 def test_oidc_login_without_stored_azure_credentials():
     text = CD.read_text(encoding="utf-8")
-    assert "azure/login@v2" in text and "client-id: ${{ vars.AZURE_CLIENT_ID }}" in text
+    assert "azure/login@v2" in text and "client-id: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}" in text
     for forbidden in ("client-secret", "creds:", "AZURE_CREDENTIALS", "publish-profile", "registry-password"):
         assert forbidden not in text, forbidden
-    secrets = {part.split("}}")[0].strip() for part in text.split("secrets.")[1:]}
-    assert secrets == {"VERIFY_EMPLOYEE_PASSWORD"}   # optional, owner-approved signed-in checks only
+    secrets = set(re.findall(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)", text))
+    # Identifiers may be stored as environment secrets (masked everywhere); the only credential is the optional,
+    # owner-approved test password. No Azure credential secret exists.
+    assert secrets == set(SEVEN_VARS) | {"VERIFY_EMPLOYEE_PASSWORD"}
 
 
 def test_images_validated_and_scanned_before_publishing(wf):
@@ -157,3 +160,13 @@ def test_helper_never_touches_secrets_or_weakens_access():
                       "scm-site", "access-restriction add", "--admin-enabled"):
         assert forbidden not in text, forbidden
     assert "set -euo pipefail" in text and "::add-mask::" in text
+
+
+def test_deployed_tags_verified_against_pushed_digests_before_success(wf):
+    steps = wf["jobs"]["release"]["steps"]
+    names = [s.get("name", "") for s in steps]
+    i = next(i for i, n in enumerate(names) if n.startswith("Deployed tags still point to the pushed digests"))
+    assert names.index("Deploy frontend (ARM sitecontainer update)") < i < next(
+        k for k, n in enumerate(names) if n.startswith("Settings, identities"))
+    run = steps[i]["run"]
+    assert "imagetools inspect" in run and "backend_digest" in run and "frontend_digest" in run and "exit 1" in run

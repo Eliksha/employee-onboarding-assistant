@@ -171,17 +171,18 @@ jobs:
       TAG: ${{ needs.build.outputs.tag }}          # local name of the scanned images (from the build job)
       HELPER: deploy/azure/cd-release.sh
     steps:
-      # The seven `production` environment variables are resolved HERE (step level), all validated before any
-      # checkout, Azure sign-in or deployment, masked, and passed to later steps through GITHUB_ENV.
+      # The seven `production` values are resolved HERE (step level), all validated before any checkout, Azure
+      # sign-in or deployment, masked, and passed to later steps through GITHUB_ENV. Environment SECRETS are
+      # preferred (GitHub masks them everywhere, including this step's header); variables are the fallback.
       - name: Validate the seven production environment variables (before Azure sign-in)
         env:
-          V_AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          V_AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          V_AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          V_AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-          V_AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER }}
-          V_BACKEND_APP: ${{ vars.BACKEND_APP }}
-          V_FRONTEND_APP: ${{ vars.FRONTEND_APP }}
+          V_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          V_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          V_AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+          V_AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP || vars.AZURE_RESOURCE_GROUP }}
+          V_AZURE_ACR_LOGIN_SERVER: ${{ secrets.AZURE_ACR_LOGIN_SERVER || vars.AZURE_ACR_LOGIN_SERVER }}
+          V_BACKEND_APP: ${{ secrets.BACKEND_APP || vars.BACKEND_APP }}
+          V_FRONTEND_APP: ${{ secrets.FRONTEND_APP || vars.FRONTEND_APP }}
         run: |
           set -euo pipefail
           missing=()
@@ -215,9 +216,9 @@ jobs:
       - name: Azure sign-in (OIDC, user-assigned managed identity; no stored credential)
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID || vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
           allow-no-subscriptions: true     # the identity has resource-scoped roles only
       - name: Azure context check (before any registry push or deployment)
         run: |
@@ -277,6 +278,16 @@ jobs:
         run: bash "$HELPER" set-image "$FRONTEND_APP" "${{ steps.push.outputs.frontend_image }}" 80
       - name: Verify frontend and backend (bounded)
         run: bash "$HELPER" wait-healthy "${{ steps.before.outputs.frontend_url }}" 600
+      - name: Deployed tags still point to the pushed digests (registry integrity)
+        run: |
+          set -euo pipefail
+          for c in backend frontend; do
+            [ "$c" = backend ] && ref="${{ steps.push.outputs.backend_image }}" want="${{ steps.push.outputs.backend_digest }}"
+            [ "$c" = frontend ] && ref="${{ steps.push.outputs.frontend_image }}" want="${{ steps.push.outputs.frontend_digest }}"
+            got=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])')
+            if [ "$got" != "$want" ]; then echo "::error::onboardai-$c tag now resolves to $got, not the pushed $want"; exit 1; fi
+            echo "onboardai-$c: registry digest equals the pushed digest ($want)"
+          done
       - name: Settings, identities, networking and security unchanged (only the image differs)
         run: |
           set -euo pipefail

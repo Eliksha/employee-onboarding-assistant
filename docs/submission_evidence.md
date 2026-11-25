@@ -2,7 +2,7 @@
 
 Consolidated, verified results for the final report (PDF) and presentation (PPT). Every figure below comes from a
 recorded run; the source document is given for each section. Status as of **25 November 2026**, repository commit
-`f69b3bc` (branch `dev`, CI run #9 passed). Continuous delivery is **implemented but not yet executed** - this document
+`f69b3bc` (branch `dev`, CI run #9 passed). Continuous delivery is **implemented; runs #1-#3 stopped safely before any production change (causes fixed) and no release has completed yet** - this document
 does not claim a CD release.
 
 | | |
@@ -160,7 +160,7 @@ the backend only via the private endpoint (frontend `/api/health` 200 with `data
 | Item | Status |
 |---|---|
 | CI (`.github/workflows/ci.yml`) | **operational**: every push and pull request; last 5 runs passed (#5-#9) |
-| CD (`.github/workflows/cd.yml`) | **implemented and validated locally, not yet executed**: manual, `main` only, CI-gated, approval environment `production` (configured by the owner: required reviewer, admin bypass disabled, `main` only), index rebuild + retrieval validation, separate Trivy vulnerability and secret scans, OIDC, immutable attempt-unique tags with digests, ARM deployment, health + configuration-drift + 8 public checks, verified automatic rollback |
+| CD (`.github/workflows/cd.yml`) | **implemented and validated; first runs #1-#3 (25 Nov 2026) stopped safely before any production change; both causes - GitHub environment setup and the OIDC subject format - are fixed; no successful release yet**: manual, `main` only, CI-gated, approval environment `production` (configured by the owner: required reviewer, admin bypass disabled, `main` only), index rebuild + retrieval validation, separate Trivy vulnerability and secret scans, OIDC, immutable attempt-unique tags with digests, ARM deployment, health + configuration-drift + 8 public checks, verified automatic rollback |
 | CD validation performed | actionlint + shellcheck clean; 12 static CD security tests; verification script 8/8 against production on PowerShell 7.4 and 5.1; index gate 6/6 + 17/17; Trivy and smoke checks pass on the current production images |
 
 *To be added after the first CD release: run number, image tags and digests, verification result.*
