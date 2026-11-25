@@ -34,7 +34,7 @@ if ($server) {
         '--name', $config.PgServer, '--location', $config.Location, '--version', $config.PgVersion,
         '--tier', $config.PgTier, '--sku-name', $config.PgSkuName, '--storage-size', [string]$config.PgStorageGb,
         '--storage-auto-grow', 'Enabled', '--backup-retention', '7', '--geo-redundant-backup', 'Disabled',
-        '--vnet', $vnet, '--subnet', 'snet-postgres', '--private-dns-zone', $zone,
+        '--vnet', $vnet, '--subnet', $(if ($config.ContainsKey('PgSubnetName')) { $config.PgSubnetName } else { 'postgres-subnet' }), '--private-dns-zone', $zone,
         '--password-auth', 'Enabled', '--microsoft-entra-auth', 'Disabled',
         '--admin-user', $config.PgAdminUser, '--admin-password', $secrets['AZURE_PG_ADMIN_PASSWORD'], '--yes', '--tags') + $tags)
 }

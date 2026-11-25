@@ -38,6 +38,7 @@ $steps = @(
     @{ Script = '30-Publish-Images.ps1'; Args = @{} },
     @{ Script = '40-Provision-AppService.ps1'; Args = @{} },
     @{ Script = '60-Migrate-Database.ps1'; Args = @{ SkipFirewall = $true } },
+    @{ Script = '45-Private-Endpoint.ps1'; Args = @{} },
     @{ Script = '65-Migrate-Database-InVNet.ps1'; Args = @{ AllowTemporaryScmBasicAuth = $true } },
     @{ Script = '50-Configure-Apps.ps1'; Args = @{} },
     @{ Script = '90-Rollback.ps1'; Args = @{ PreviousTag = 'previous-tag' } }
@@ -90,7 +91,8 @@ $conditional = @(
     @{ Sub = @('postgres', 'flexible-server', 'update'); Flags = @('--resource-group', '--name', '--admin-password'); Why = 'printed: admin password rotation' },
     @{ Sub = @('network', 'vnet', 'subnet', 'show'); Flags = @('--resource-group', '--vnet-name', '--name'); Why = '15 reuse check' },
     @{ Sub = @('network', 'private-dns', 'link', 'vnet', 'show'); Flags = @('--resource-group', '--zone-name', '--name'); Why = '15 reuse check' },
-    @{ Sub = @('webapp', 'config', 'access-restriction', 'show'); Flags = @('--resource-group', '--name'); Why = '50 isolation check' }
+    @{ Sub = @('webapp', 'config', 'access-restriction', 'show'); Flags = @('--resource-group', '--name'); Why = '50 isolation check' },
+    @{ Sub = @('resource', 'show'); Flags = @('--resource-group', '--namespace', '--resource-type', '--parent', '--name'); Why = '65 SCM policy pre-check' }
 )
 foreach ($c in $conditional) {
     $text = (& az @($c.Sub) --help 2>&1 | Out-String)
@@ -101,7 +103,7 @@ foreach ($c in $conditional) {
 Write-Host "`n== 4. Redaction" -ForegroundColor Cyan
 $config = Import-PowerShellDataFile -LiteralPath $ConfigPath
 $leaks = 0
-if (Test-Path -LiteralPath $config.SecretsFile) {
+if ($config.SecretsFile -notmatch "[<>]" -and (Test-Path -LiteralPath $config.SecretsFile)) {
     foreach ($line in Get-Content -LiteralPath $config.SecretsFile) {
         if ($line -match '^\s*([A-Z0-9_]*(PASSWORD|SECRET|KEY|TOKEN|ENDPOINT)[A-Z0-9_]*)\s*=\s*(.+)$') {
             $value = $Matches[3].Trim().Trim('"').Trim("'")

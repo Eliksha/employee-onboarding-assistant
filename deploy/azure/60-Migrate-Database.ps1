@@ -59,8 +59,8 @@ $targetDsn = "host=$TargetHost port=$TargetPort dbname=$TargetDatabase user=$Tar
 $tables = @('employees', 'leave_balances', 'assets', 'payroll_calendar', 'checklist', 'checklist_assignments', 'tickets',
             'messages', 'feedback', 'escalations', 'user_accounts')
 $fingerprintSql = (($tables | ForEach-Object {
-    "SELECT '$_' AS t, count(*) AS n, md5(coalesce(string_agg(x::text, '|' ORDER BY x::text), '')) AS h FROM public.$_ x"
-}) + "SELECT 'scope_key', count(*), md5(coalesce(string_agg(x::text, '|' ORDER BY x::text), '')) FROM onboardai_private.scope_key x") -join "`nUNION ALL "
+    "SELECT '$_' AS t, count(*) AS n, md5(coalesce(string_agg(x::text, '|' ORDER BY x::text COLLATE ""C""), '')) AS h FROM public.$_ x"
+}) + "SELECT 'scope_key', count(*), md5(coalesce(string_agg(x::text, '|' ORDER BY x::text COLLATE ""C""), '')) FROM onboardai_private.scope_key x") -join "`nUNION ALL "
 $fingerprintSql += "`nORDER BY 1;"
 
 $envNames = @('PGPASSWORD', 'PG_ADMIN_PASSWORD', 'PG_PASSWORD', 'PG_READER_PASSWORD', 'PG_SCOPE_SECRET',

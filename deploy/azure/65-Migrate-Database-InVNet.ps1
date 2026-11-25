@@ -42,7 +42,10 @@ param(
     # (HTTP Basic). With SCM basic auth disabled the tunnel is refused, so this switch (owner approval required)
     # enables SCM basic auth ONLY for the migration window; the cleanup always disables it again and regenerates the
     # publishing password, invalidating the credential the tunnel used. FTP basic auth is never enabled.
-    [switch] $AllowTemporaryScmBasicAuth
+    [switch] $AllowTemporaryScmBasicAuth,
+    # Operator's public IPv4: during the window the SCM site admits only this address (default deny); afterwards the
+    # temporary rule is removed and the SCM default stays Deny.
+    [string] $ScmAllowIp = ''
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'OnboardAI.Azure.psm1') -Force
@@ -59,10 +62,10 @@ $work = Join-Path ([System.IO.Path]::GetTempPath()) ('onboardai-vnet-migration-'
 $tables = @('employees', 'leave_balances', 'assets', 'payroll_calendar', 'checklist', 'checklist_assignments', 'tickets',
             'messages', 'feedback', 'escalations', 'user_accounts')
 $fingerprintSql = (($tables | ForEach-Object {
-    "SELECT '$_' AS t, count(*) AS n, md5(coalesce(string_agg(x::text, '|' ORDER BY x::text), '')) AS h FROM public.$_ x"
-}) + "SELECT 'scope_key', count(*), md5(coalesce(string_agg(x::text, '|' ORDER BY x::text), '')) FROM onboardai_private.scope_key x") -join "`nUNION ALL "
+    "SELECT '$_' AS t, count(*) AS n, md5(coalesce(string_agg(x::text, '|' ORDER BY x::text COLLATE ""C""), '')) AS h FROM public.$_ x"
+}) + "SELECT 'scope_key', count(*), md5(coalesce(string_agg(x::text, '|' ORDER BY x::text COLLATE ""C""), '')) FROM onboardai_private.scope_key x") -join "`nUNION ALL "
 $fingerprintSql += "`nORDER BY 1;"
-$tunnel = $null; $switched = $false; $keySet = $false; $scmBasicEnabled = $false
+$tunnel = $null; $switched = $false; $keySet = $false; $scmBasicEnabled = $false; $scmRestricted = $false
 $scmPolicy = @('--resource-group', $rg, '--namespace', 'Microsoft.Web', '--resource-type', 'basicPublishingCredentialsPolicies',
                '--parent', "sites/$app", '--name', 'scm')
 
@@ -121,18 +124,30 @@ try {
     if (-not $SkipAzure) {
         Write-Host "`n[2/4] Temporary migration image and SCM tunnel" -ForegroundColor Cyan
         Invoke-Az -Arguments @('account', 'set', '--subscription', $config.SubscriptionId)
+        # Fail fast BEFORE any Azure change: the CLI tunnel needs SCM basic auth (publishing credentials).
+        $policy = Find-AzResource -Arguments (@('resource', 'show') + $scmPolicy) -DryRunResult ([pscustomobject]@{ properties = [pscustomobject]@{ allow = $false } })
+        if (-not $policy.properties.allow -and -not $AllowTemporaryScmBasicAuth -and -not (Test-DryRun)) {
+            throw ('SCM basic auth is disabled and -AllowTemporaryScmBasicAuth was not given: az webapp create-remote-connection ' +
+                   'cannot authenticate. Nothing was changed in Azure. Re-run with the switch once it is approved.')
+        }
         $root = Get-RepositoryRoot
         Invoke-Docker -Arguments @('build', '-f', (Join-Path $root 'deploy/azure/migration/migration.Dockerfile'), '--build-arg',
             "BASE_IMAGE=$LocalBackendImage", '-t', $migrateImage, $root)
         Invoke-Az -Arguments @('acr', 'login', '--name', $config.AcrName)
         Invoke-Docker -Arguments @('push', $migrateImage)
-        $publicKey = if (Test-DryRun) { 'ssh-ed25519 <one-time public key>' } else { (Get-Content -LiteralPath "$key.pub" -Raw).Trim() }
-        Set-AppSettingsFromHashtable -ResourceGroup $rg -App $app -Settings @{ MIGRATION_SSH_AUTHORIZED_KEY = $publicKey }
-        $keySet = $true
-        $existing = Find-AzResource -Arguments @('webapp', 'show', '--resource-group', $rg, '--name', $app)
-        Set-WebAppImage -ResourceGroup $rg -App $app -Image $migrateImage -Port 8000 -ExistingApp $existing
-        $switched = $true
-        Invoke-Az -Arguments @('webapp', 'restart', '--resource-group', $rg, '--name', $app)
+        # ALL site configuration changes first (each one restarts the site), then ONE stop/start: a restart in the middle
+        # of these changes cycles the container while the tunnel connects (root cause of attempts 2 and 3), and stop/start
+        # also clears the platform's crash backoff left by the production image on the empty database.
+        if ($ScmAllowIp) {
+            if ($ScmAllowIp -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw 'ScmAllowIp must be one IPv4 address.' }
+            Write-Host "  SCM site: allow only the operator address during the migration window (default deny)"
+            Invoke-Az -Arguments @('webapp', 'config', 'access-restriction', 'add', '--resource-group', $rg, '--name', $app,
+                '--rule-name', 'migration-operator', '--action', 'Allow', '--ip-address', "$ScmAllowIp/32", '--priority', '100',
+                '--scm-site', 'true')
+            Invoke-Az -Arguments @('webapp', 'config', 'access-restriction', 'set', '--resource-group', $rg, '--name', $app,
+                '--scm-default-action', 'Deny', '--use-same-restrictions-for-scm-site', 'false')
+            $scmRestricted = $true
+        }
         if ($AllowTemporaryScmBasicAuth) {
             Write-Host '  temporarily enabling SCM basic auth for the tunnel (disabled again + password regenerated in cleanup)' -ForegroundColor Yellow
             Invoke-Az -Arguments (@('resource', 'update') + $scmPolicy + @('--set', 'properties.allow=true'))
@@ -140,22 +155,61 @@ try {
         } else {
             Write-Warning 'SCM basic auth stays disabled; az webapp create-remote-connection (CLI 2.91) needs it. Re-run with -AllowTemporaryScmBasicAuth (approval) if the tunnel is refused.'
         }
+        $publicKey = if (Test-DryRun) { 'ssh-ed25519 <one-time public key>' } else { (Get-Content -LiteralPath "$key.pub" -Raw).Trim() }
+        Set-AppSettingsFromHashtable -ResourceGroup $rg -App $app -Settings @{ MIGRATION_SSH_AUTHORIZED_KEY = $publicKey }
+        $keySet = $true
+        $existing = Find-AzResource -Arguments @('webapp', 'show', '--resource-group', $rg, '--name', $app)
+        Set-WebAppImage -ResourceGroup $rg -App $app -Image $migrateImage -Port 8000 -ExistingApp $existing
+        $switched = $true
+        Invoke-Az -Arguments @('webapp', 'stop', '--resource-group', $rg, '--name', $app)
+        Invoke-Az -Arguments @('webapp', 'start', '--resource-group', $rg, '--name', $app)
         Write-Host "  starting tunnel: az webapp create-remote-connection --resource-group $rg --name $app --port $TunnelPort"
         if (-not (Test-DryRun)) {
-            Start-Sleep -Seconds 90   # image pull + container start
+            $tunnelOut = Join-Path $work 'tunnel.out'; $tunnelErr = Join-Path $work 'tunnel.err'
             $tunnel = Start-Process -FilePath 'az' -ArgumentList @('webapp', 'create-remote-connection', '--resource-group', $rg,
-                '--name', $app, '--port', [string]$TunnelPort) -PassThru -WindowStyle Hidden
-            $deadline = (Get-Date).AddMinutes(4)
-            while (-not (Test-NetConnection -ComputerName 127.0.0.1 -Port $TunnelPort -InformationLevel Quiet -WarningAction SilentlyContinue)) {
-                if ((Get-Date) -gt $deadline) { throw 'The SCM tunnel did not open within 4 minutes.' }
-                Start-Sleep -Seconds 5
-            }
+                '--name', $app, '--port', [string]$TunnelPort) -PassThru -WindowStyle Hidden `
+                -RedirectStandardOutput $tunnelOut -RedirectStandardError $tunnelErr
         }
         $SshHost = '127.0.0.1'; $SshPort = $TunnelPort
     }
     if ($SshPort -le 0) { throw 'No SSH port: use the Azure tunnel (default) or -SkipAzure -SshPort for a rehearsal.' }
     $target = "appuser@$SshHost"
     $portArgs = @('-p', [string]$SshPort)
+
+    # Readiness (bounded: 15 minutes): probe with the one-time key until the migration container's sshd answers; restart
+    # the tunnel if it exited. Tunnel output is kept in the work directory (deleted at the end) and shown on failure
+    # WITHOUT the line in which the CLI prints the publishing credentials.
+    if (-not (Test-DryRun)) {
+        $ready = $false; $deadline = (Get-Date).AddMinutes(15); $attempt = 0; $lastProbe = ''
+        while (-not $ready -and (Get-Date) -lt $deadline) {
+            $attempt++
+            if (-not $SkipAzure -and $tunnel -and $tunnel.HasExited) {
+                Write-Host "  tunnel exited (code $($tunnel.ExitCode)); restarting it"
+                $tunnel = Start-Process -FilePath 'az' -ArgumentList @('webapp', 'create-remote-connection', '--resource-group', $rg,
+                    '--name', $app, '--port', [string]$TunnelPort) -PassThru -WindowStyle Hidden `
+                    -RedirectStandardOutput $tunnelOut -RedirectStandardError $tunnelErr
+                Start-Sleep -Seconds 15
+            }
+            $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            try { $lastProbe = & $ssh @($sshOptions + $portArgs + @('-o', 'ConnectTimeout=10', $target, 'echo ready')) 2>&1 | Out-String }
+            finally { $ErrorActionPreference = $previous }
+            if ($LASTEXITCODE -eq 0 -and $lastProbe -match 'ready') { $ready = $true; Write-Host "  migration container answers over SSH (attempt $attempt)" }
+            else {
+                if ($attempt % 6 -eq 1) { Write-Host ("  waiting for the migration container (attempt {0}): {1}" -f $attempt, (($lastProbe -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1) -replace '\s+$', '')) }
+                Start-Sleep -Seconds 10
+            }
+        }
+        if (-not $ready) {
+            if (-not $SkipAzure) {
+                foreach ($f in $tunnelOut, $tunnelErr) {
+                    if (Test-Path -LiteralPath $f) {
+                        Get-Content -LiteralPath $f | Where-Object { $_ -notmatch '(?i)password|username' } | Select-Object -Last 8 | ForEach-Object { Write-Host "  tunnel: $_" }
+                    }
+                }
+            }
+            throw "The migration container did not answer over the SSH tunnel within 15 minutes (last probe: $(($lastProbe -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)))."
+        }
+    }
 
     # Parenthesised: in PowerShell the comma binds tighter than '+' (unparenthesised, all values became one line).
     $stdin = (@(('PG_ADMIN_USER=' + $config.PgAdminUser), ('PG_ADMIN_PASSWORD=' + $secrets[$AdminPasswordKey]),
@@ -177,12 +231,25 @@ finally {
     if ($SshPort -gt 0 -and -not (Test-DryRun) -and (Test-Path -LiteralPath $key -ErrorAction SilentlyContinue)) {
         try { Invoke-Native $ssh ($sshOptions + @('-p', [string]$SshPort, "appuser@$SshHost", 'onboardai-in-vnet-migrate', 'cleanup')) } catch { Write-Warning "remote cleanup: $_" }
     }
-    if ($tunnel -and -not $tunnel.HasExited) { Stop-Process -Id $tunnel.Id -Force; Write-Host '  tunnel closed' }
+    # az is a .cmd wrapper: its python child holds tunnel.out/err open, so the whole process TREE is killed (attempt 4
+    # left the work directory behind because only the wrapper was stopped).
+    if ($tunnel) {
+        & taskkill.exe /PID $tunnel.Id /T /F 2>&1 | Out-Null
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'create-remote-connection' } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        try { $tunnel.WaitForExit(10000) | Out-Null } catch { }
+        Write-Host '  tunnel closed (process tree)'
+    }
     if ($scmBasicEnabled -or ((Test-DryRun) -and $AllowTemporaryScmBasicAuth)) {
         Invoke-Az -Arguments (@('resource', 'update') + $scmPolicy + @('--set', 'properties.allow=false'))
         $site = Find-AzResource -Arguments @('webapp', 'show', '--resource-group', $rg, '--name', $app) -DryRunResult ([pscustomobject]@{ id = '<site-resource-id>' })
         Invoke-Az -Arguments @('resource', 'invoke-action', '--ids', $site.id, '--action', 'newpassword') -AllowFailure
         Write-Host '  SCM basic auth disabled again; publishing password regenerated'
+    }
+    if ($scmRestricted) {
+        Invoke-Az -Arguments @('webapp', 'config', 'access-restriction', 'remove', '--resource-group', $rg, '--name', $app,
+            '--rule-name', 'migration-operator', '--scm-site', 'true') -AllowFailure
+        Write-Host '  temporary SCM operator rule removed; SCM default action stays Deny'
     }
     if (-not $SkipAzure) {
         if ($keySet -or (Test-DryRun)) {
@@ -196,7 +263,12 @@ finally {
             Write-Host '  backend switched back to the production image (no SSH server)'
         }
     }
-    if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force; Write-Host '  local key pair, dump and fingerprints deleted' }
+    if (Test-Path -LiteralPath $work) {
+        for ($i = 1; $i -le 10 -and (Test-Path -LiteralPath $work); $i++) {   # bounded: handles may close a moment after the kill
+            try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop } catch { if ($i -eq 10) { Write-Warning "DELETE MANUALLY (private key inside): $work :: $_" } else { Start-Sleep -Seconds 2 } }
+        }
+        if (-not (Test-Path -LiteralPath $work)) { Write-Host '  local key pair, dump and fingerprints deleted' }
+    }
     Write-Host "`nNext (needs approval): rotate the PostgreSQL administrator password, e.g." -ForegroundColor Yellow
     Write-Host "  az postgres flexible-server update --resource-group $rg --name $($config.PgServer) --admin-password <new value from the secrets file>"
 }

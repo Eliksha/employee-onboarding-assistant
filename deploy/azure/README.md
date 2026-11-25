@@ -4,10 +4,26 @@ Windows PowerShell 5.1+, Azure CLI 2.91+, Docker Desktop. Every script is a **dr
 commands) unless `-Execute` is passed. Secrets are read from the external secrets file only; nothing secret is printed
 or written to the repository. Existing resources are **reused** (create only what is missing).
 
-Target: South India; shared Linux App Service plan (P0v3); Web Apps `onboardai-eliksha-backend` and
+Target: South India; shared Linux App Service plan (B1); Web Apps `onboardai-eliksha-backend` and
 `onboardai-eliksha-frontend`; ACR `onboardaielikshaacr` (Basic, admin disabled, TenantReuse login server); Azure
-Database for PostgreSQL Flexible Server 16; Azure OpenAI GPT-4.1. FAISS index and handbook PDF are bundled in the
-backend image.
+Database for PostgreSQL Flexible Server 16 (private, VNet-injected); Azure OpenAI GPT-4.1. FAISS index and handbook PDF
+are bundled in the backend image.
+
+**Status: deployed and verified on 25 November 2026** (production verification 17/17). Executed order:
+`05 -> 00 -> 20 -> 30 -> 40 (-HardenOnly) -> 15 -> 10 -> 50 -> 65 -> 40 -> 45 -> admin password rotation -> 70`.
+
+Deployed network:
+
+| Resource | Configuration |
+|---|---|
+| `onboardai-vnet` (10.0.0.0/16) | reused (owner-created) |
+| `postgres-subnet` (10.0.1.0/24) | delegated to PostgreSQL; hosts the VNet-injected server |
+| `appservice-subnet` (10.0.2.0/24) | delegated to `Microsoft.Web/serverFarms`; regional VNet integration of both apps, route all |
+| `private-endpoint-subnet` (10.0.3.0/24) | backend private endpoint `onboardai-eliksha-backend-pe` (group `sites`) |
+| Private DNS | PostgreSQL zone (portal) and `privatelink.azurewebsites.net` (step 45), both linked to the VNet |
+| Backend | `publicNetworkAccess = Disabled`: main and SCM sites only through the private endpoint (403 from the internet) |
+| Frontend | the only public endpoint; SCM default deny |
+| Both apps | SCM/FTP basic auth disabled, FTPS disabled, HTTPS only, TLS 1.2+, managed-identity image pull |
 
 ## 0. Validate locally (no Azure access)
 
@@ -54,9 +70,9 @@ The database has **no public access and no firewall rules**. Order (after the po
 Microsoft.Network/privateDnsZones and privateDnsZones/virtualNetworkLinks):
 
 ```powershell
-.\deploy\azure\15-Provision-Network.ps1 -Execute      # VNet, snet-postgres + snet-app (delegated), private DNS zone + link,
-                                                      # backend regional VNet integration (route all)
-.\deploy\azure\10-Provision-Database.ps1 -Execute     # server created PRIVATE in snet-postgres; refuses a public server
+.\deploy\azure\15-Provision-Network.ps1 -Execute      # REUSES onboardai-vnet + postgres-subnet + private DNS (portal); re-delegates appservice-subnet (Microsoft.Web),
+                                                      # regional VNet integration of both apps (route all)
+.\deploy\azure\10-Provision-Database.ps1 -Execute     # REUSES the portal server onboardai-eliksha-db (creates only if absent); refuses public
 .\deploy\azure\50-Configure-Apps.ps1 -Execute         # PG_HOST = private FQDN; no database firewall rules
 .\deploy\azure\65-Migrate-Database-InVNet.ps1 -Execute
 ```
@@ -70,8 +86,20 @@ Microsoft.Network/privateDnsZones and privateDnsZones/virtualNetworkLinks):
 3. Uploads over scp and runs `onboardai-in-vnet-migrate migrate` with the secrets on stdin: refuses a non-empty target,
    TLS verify-full, one-transaction restore, identical fingerprints, 008, 005, verify 007/008/005, app-role startup checks,
    automatic rollback to an empty database on any error.
-4. Always: shreds the uploads, closes the tunnel, deletes the key setting, switches back to the PRODUCTION image (no SSH
-   server), deletes the local key pair and dump. Then rotate the PostgreSQL administrator password (printed command).
+4. Always: shreds the uploads, closes the tunnel (whole process tree), deletes the key setting, switches back to the
+   PRODUCTION image (no SSH server), disables SCM basic auth again and regenerates the publishing password, removes the
+   temporary SCM operator rule, deletes the local key pair and dump. Then rotate the PostgreSQL administrator password.
+
+The CLI tunnel authenticates with publishing credentials, so `-AllowTemporaryScmBasicAuth -ScmAllowIp <operator IP>`
+(owner approval) enables SCM basic auth for the migration window only, with the SCM site restricted to the operator IP.
+The script stops before any Azure change if SCM basic auth is off and the switch is not given. All configuration is
+applied before ONE stop/start of the backend (each settings change restarts the site), then a bounded 15-minute
+readiness loop waits for the SSH server.
+
+Production run (25 Nov 2026): attempt 4 succeeded in 525 s - TLS 1.3 verify-full, 12/12 table fingerprints identical,
+008 and 005 applied, startup checks passed. Earlier attempts: a collation-dependent fingerprint (fixed with
+`COLLATE "C"`; automatic rollback worked) and startup backoff of the production image on the empty database (fixed by
+the single restart and the readiness loop). Cleanup verified in Azure afterwards.
 
 Rollback of the migration: `65-Migrate-Database-InVNet.ps1 -Execute -Rollback` (empty target database; source unchanged).
 SSH security: ed25519 public key only, no passwords, no root, only `appuser`, no TCP/agent/X11 forwarding (database access
@@ -88,8 +116,21 @@ run against Azure and is kept for local rehearsals only.
 .\deploy\azure\50-Configure-Apps.ps1 -Execute
 # backend: PG (app + reader roles, scope secret), Azure OpenAI, BACKEND_PROXY_SECRET, TRUSTED_PROXY_HOPS=3
 # frontend: BACKEND_ORIGIN/HOST (discovered host name), same proxy secret
-# backend access restriction: frontend outbound IPs only; PostgreSQL is private (no firewall rules); restart both
+# backend access restriction: integration subnet only (service endpoint, default deny); no IP rules;
+# PostgreSQL is private (no firewall rules); restart both
 ```
+
+## 6b. Backend private endpoint (after the migration and step 40)
+
+```powershell
+.\deploy\azure\45-Private-Endpoint.ps1 -Execute
+# removes the unused delegation of private-endpoint-subnet; private DNS zone privatelink.azurewebsites.net + VNet link;
+# private endpoint (group sites) + DNS zone group; checks the connection is Approved; backend publicNetworkAccess=Disabled
+az webapp restart --resource-group <rg> --name onboardai-eliksha-frontend   # nginx re-resolves the backend host (private IP)
+```
+
+Run it after step 65: the migration tunnel uses the backend's public SCM site. Rollback: set the backend's
+`publicNetworkAccess` back to `Enabled` (the subnet access restriction still applies), then delete the endpoint.
 
 ## 7. Verify
 
@@ -99,8 +140,10 @@ $env:VERIFY_PW = '<employee password>'
 Remove-Item Env:VERIFY_PW
 ```
 
-16 checks (headers/HSTS/CSP, health, docs and readiness hidden, auth, isolation, GPT-4.1 answer citing handbook.pdf p. 3
-within 5 s, fallback, history, sign-out) plus direct-backend refusal. Rehearsed: 16/16.
+17 checks: 8 public (frontend health, HSTS/CSP/X-Frame-Options/nosniff, API health with database, docs and readiness
+hidden, sign-in required, generic login error, backend not usable directly) and 9 signed-in (secure cookie, own data,
+other employees refused, GPT-4.1 answer citing handbook.pdf p. 3 within 5 s, fallback, history, sign-out).
+**Production (25 Nov 2026): 17/17 passed; grounded answer in 4232 ms.**
 
 Trusted proxy hops (rate limiting per client): after deployment, 20 failed sign-ins from one network must block that
 client only, not a second client on another network. If a second client is also blocked, the hop count is too low.
@@ -113,3 +156,9 @@ client only, not a second client on another network. If a second client is also 
 ```
 
 Database changes are additive (008); data recovery uses Azure point-in-time restore into a new server (needs approval).
+
+## Administrator password
+
+Rotated after the migration to a random value that was not stored; the application does not use the administrator
+login. When administrator access is needed, reset it and keep the new value in the external secrets file only:
+`az postgres flexible-server update --resource-group <rg> --name <server> --admin-password <new value>`.

@@ -1,6 +1,6 @@
 # Runbook: OnboardAI (local and Docker)
 
-Operational guide for running, checking and troubleshooting OnboardAI locally. Installation steps are in the root [README](../README.md); this runbook assumes they are complete. Azure operations are not covered because nothing is deployed to Azure yet.
+Operational guide for running, checking and troubleshooting OnboardAI locally. Installation steps are in the root [README](../README.md); this runbook assumes they are complete. Azure deployment and operations (deployed and verified 25 November 2026) are covered by [deploy/azure/README.md](../deploy/azure/README.md).
 
 All commands are PowerShell and run from the project root unless stated otherwise.
 

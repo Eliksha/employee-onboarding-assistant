@@ -15,7 +15,7 @@ EY GDS capstone project - Domain: Generative AI for Human Resources.
 | Persistence | PostgreSQL 16 (primary), SQLite (local fallback and tests) |
 | Docker Compose (frontend + backend + PostgreSQL) | Implemented and verified locally |
 | LLM provider | **Azure OpenAI, GPT-4.1 deployment** (OpenAI v1 Responses API, `store=false`) |
-| Azure (Azure OpenAI, hosting, identity) | **Not started** - planned final platform, pending Azure access |
+| Azure deployment | **Deployed and verified (25 Nov 2026)** - App Service (frontend public, backend behind a private endpoint), private PostgreSQL Flexible Server 16, Azure Container Registry, Azure OpenAI; production verification 17/17 passed. See [Azure deployment](#azure-deployment) |
 | Authentication / authorization | Email + password (Argon2id), server-side sessions, CSRF protection, per-employee authorization, admin role - implemented and tested locally |
 | External identity (Microsoft Entra ID / OAuth) | Not implemented (out of scope for now) |
 
@@ -52,7 +52,7 @@ flowchart LR
     raw["data/raw<br/>handbook.md, faqs.md"] -->|"python -m backend.services.ingest"| idx
 ```
 
-More detail, including the RAG decision flow: [docs/architecture.md](docs/architecture.md).
+More detail, including the RAG decision flow and the deployed Azure network diagram: [docs/architecture.md](docs/architecture.md).
 
 ## Technology stack
 
@@ -302,21 +302,38 @@ Additional checks performed during development (scripts not in the repository): 
 
 Azure OpenAI is the only LLM provider (Groq has been removed). `backend/services/llm.py` uses the OpenAI Python SDK against the resource's v1 endpoint with the Responses API: `model` = the deployment name (`gpt-4.1`), the grounded system prompt as `instructions`, the retrieved passages wrapped as untrusted context in `input`, `temperature=0`, `store=false`; no dated `api-version` is needed. Missing or invalid configuration fails closed (503, no request); provider errors are logged with type and HTTP status only; a content-filtered prompt or an incomplete response produces the standard fallback. Instructions aimed at the assistant inside retrieved text (indirect prompt injection) are removed before the prompt is built, keeping the rest of the policy passage. Evaluation results: `docs/azure_eval_report.md`, `docs/rag_eval_report.md`. Setup and activation: runbook section 13.
 
-Remaining Azure work (not implemented):
+## Azure deployment
 
-1. Store keys in Azure Key Vault or use managed identity / Entra ID authentication instead of an API key in a secrets file.
-2. Re-validate `SIMILARITY_THRESHOLD`, `BORDERLINE_MARGIN` and `NOT_FOUND` behaviour periodically with real questions.
-5. Decide hosting, managed PostgreSQL and HTTPS before any non-local deployment; decide later whether to keep local accounts or move to an external identity provider (for example Microsoft Entra ID).
+Deployed on 25 November 2026 to Azure (South India) with the PowerShell scripts in [deploy/azure/](deploy/azure/README.md) (dry run by default, existing resources reused, no secrets in the repository).
+
+| Component | Deployed configuration |
+|---|---|
+| Frontend | Linux Web App (nginx + React build), the only public endpoint: HTTPS only, TLS 1.2+, security headers, `/api/*` proxied to the backend |
+| Backend | Linux Web App (FastAPI, FAISS index and embedding model in the image); **public network access disabled**, reachable only through a private endpoint (private DNS `privatelink.azurewebsites.net`) |
+| Network | VNet with an App Service integration subnet (both apps, route all), a private-endpoint subnet and a delegated PostgreSQL subnet |
+| Database | Azure Database for PostgreSQL Flexible Server 16, VNet-injected, public access disabled, no firewall rules, TLS required and verified; app uses the least-privilege `onboardai_app` / `onboardai_reader` roles with row-level security |
+| Images | Azure Container Registry (admin user disabled), pulled with system-assigned managed identities |
+| LLM | Azure OpenAI GPT-4.1 deployment (Responses API, `store=false`) |
+| Hardening | SCM/FTP basic authentication disabled on both apps, FTPS disabled, health checks `/ready` and `/healthz`; database administrator password rotated after migration |
+
+**Production verification** (`deploy/azure/70-Verify-Deployment.ps1`): 17/17 passed - 8 public checks (health, HSTS/CSP/X-Frame-Options/nosniff, API docs and readiness hidden, sign-in required, generic login error, backend not usable directly) and 9 signed-in checks (secure session cookie, own profile and checklist, other employees' data refused, grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms against a 5000 ms target, out-of-scope fallback, history, sign-out). Migration and deployment evidence: [docs/project_plan.md](docs/project_plan.md).
+
+Remaining Azure improvements (not implemented):
+
+1. Move secrets from App Service app settings to Azure Key Vault references, and use managed identity / Entra ID authentication for Azure OpenAI and PostgreSQL instead of keys and passwords.
+2. Continuous deployment (CI builds and tests only; deployment is run manually with the scripts).
+3. Re-validate `SIMILARITY_THRESHOLD`, `BORDERLINE_MARGIN` and `NOT_FOUND` behaviour periodically with real questions.
+4. Decide later whether to keep local accounts or move to an external identity provider (for example Microsoft Entra ID).
 
 ## Known limitations
 
-- Only Azure OpenAI is used; hosting, managed PostgreSQL, HTTPS and Key Vault are not set up yet (the stack runs locally in Docker).
+- Azure deployment is a single instance on a Basic (B1) App Service plan with manual, script-based deployment; secrets are App Service app settings (no Key Vault yet); no WAF in front of the public frontend.
 - Authentication is local email/password only: no MFA, no password reset or self-service password change, no external identity provider, no admin UI (admin actions are API-only).
 - Login rate limiting is held in process memory: it resets on restart and is not shared across multiple backend processes; a locked email blocks that account for up to 15 minutes (possible nuisance lockout). In Docker the backend port 8000 is also published on localhost while `X-Forwarded-For` is trusted, so a local client could bypass the per-IP limit (the per-email limit still applies).
 - Synthetic, single-company knowledge base (48 chunks); retrieval misses some paraphrased questions (documented in the RAG report).
 - Grounding checks are lexical; paraphrased unsupported claims without numbers or emails can pass.
 - PostgreSQL schema is provided as a snapshot (`docker/postgres/`); migrations in `backend/migrations/` target SQLite only.
-- Direct dependencies are pinned (`requirements.txt`, `requirements-dev.txt`); transitive dependencies are not locked. No HTTPS.
+- Direct dependencies are pinned (`requirements.txt`, `requirements-dev.txt`); transitive dependencies are not locked. HTTPS is provided by Azure App Service; the local Docker stack is HTTP on localhost only.
 - The load test is a small smoke-level run (10 users, 60 s, records questions only); see [docs/load_test_report.md](docs/load_test_report.md).
 - The five M3 held-out evaluation failures were fixed in M4 (see [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md)); the router remains rule-based, so unusual phrasings can still fall back to the handbook.
 - CSV import is a manual CLI (no upload UI); dates are still stored as text; the import role must be provisioned (migration 006) before importing into PostgreSQL.
@@ -328,6 +345,7 @@ Remaining Azure work (not implemented):
 - [docs/project_plan.md](docs/project_plan.md) - milestones, step-by-step progress, test evidence, risks
 - [docs/final_local_test_report.md](docs/final_local_test_report.md) - final local test results, known issues, Azure prerequisites
 - [docs/runbook.md](docs/runbook.md) - start/stop, health checks, logs, troubleshooting
+- [deploy/azure/README.md](deploy/azure/README.md) - Azure deployment runbook (scripts, order, migration, verification, rollback)
 - [docs/demo_script.md](docs/demo_script.md) - 10-minute demonstration walkthrough
 - [docs/architecture.md](docs/architecture.md) - architecture and RAG flow
 - [docs/rag_eval_report.md](docs/rag_eval_report.md) - latest RAG evaluation output

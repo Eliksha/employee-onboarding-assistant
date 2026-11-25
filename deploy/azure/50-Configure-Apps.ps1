@@ -55,7 +55,7 @@ Set-AppSettingsFromHashtable -ResourceGroup $config.ResourceGroup -App $config.F
 }
 
 Write-Host "`nNetwork isolation check" -ForegroundColor Cyan
-# Frontend -> backend isolation is NETWORK-level (15-Provision-Network.ps1): both apps are VNet-integrated in snet-app,
+# Frontend -> backend isolation is NETWORK-level (15-Provision-Network.ps1): both apps are VNet-integrated in appservice-subnet,
 # which has the Microsoft.Web service endpoint, and the backend admits only that subnet (default deny). No shared-IP
 # rules are used (the plan's outbound IPs are shared with other apps). The proxy-key header remains an additional layer.
 $restrictions = Find-AzResource -Arguments @('webapp', 'config', 'access-restriction', 'show', '--resource-group', $config.ResourceGroup,
@@ -83,4 +83,4 @@ if ($backend -and -not $backend.virtualNetworkSubnetId) {
 foreach ($app in $config.BackendApp, $config.FrontendApp) {
     Invoke-Az -Arguments @('webapp', 'restart', '--resource-group', $config.ResourceGroup, '--name', $app)
 }
-Write-Host "`nConfigured. Next: 70-Verify-Deployment.ps1 -BaseUrl https://$($config.FrontendApp).azurewebsites.net" -ForegroundColor Cyan
+Write-Host "`nConfigured. Next: 65-Migrate-Database-InVNet.ps1, then 40-Provision-AppService.ps1 and 70-Verify-Deployment.ps1." -ForegroundColor Cyan

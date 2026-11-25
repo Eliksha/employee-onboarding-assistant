@@ -1,6 +1,6 @@
 # Architecture: OnboardAI
 
-Current architecture of the local implementation (updated 23 November 2026), including local email/password authentication. Azure components are planned, not implemented.
+Current architecture (updated 25 November 2026), including local email/password authentication. The application is deployed on Azure (App Service, private PostgreSQL Flexible Server, Azure OpenAI) and verified in production; see [Deployment view (Azure)](#deployment-view-azure). The local Docker Compose stack remains the development and rehearsal environment.
 
 ## System overview
 
@@ -146,7 +146,7 @@ flowchart LR
 | Database roles | `backend/services/db_roles.py`, `backend/migrations/005_least_privilege_roles.py` | Least-privilege `onboardai_app` / `onboardai_reader` roles, owner-only signing key (`onboardai_private`), `SECURITY DEFINER` scope verifier (`onboardai_rls`) and RLS policies (provisioning steps: [runbook section 9](runbook.md#9-database-roles-least-privilege)) |
 | Containers | `Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` | Local frontend + backend + PostgreSQL stack |
 
-## Deployment view (local Docker Compose)
+## Deployment view (local Docker Compose, development)
 
 - `frontend`: nginx on 127.0.0.1:8080, serves the build, proxies `/api/*` to `backend:8000`.
 - `backend`: FastAPI on 127.0.0.1:8000, embedding model inside the image, FAISS index mounted read-only, logs on a named volume.
@@ -154,9 +154,51 @@ flowchart LR
 - The backend trusts `X-Forwarded-For`/`-Proto` from nginx (`TRUST_PROXY_HEADERS=true`) for login rate limiting and the cookie `Secure` flag.
 - Startup order via health checks; `restart: unless-stopped`.
 
-## Planned Azure target (not implemented)
+## Deployment view (Azure)
 
-Azure OpenAI (GPT-4.1) is implemented and is the only LLM provider; hosting, managed PostgreSQL, HTTPS and secret storage (Key Vault / managed identity) are to be confirmed once Azure access is available. Local email/password authentication is implemented; an external identity provider (for example Microsoft Entra ID) is a possible later change, not current scope. See the migration section in the root [README](../README.md).
+Deployed 25 November 2026 (region South India) and verified in production: 17/17 checks (8 public, 9 signed-in), grounded GPT-4.1 answer citing handbook.pdf page 3 in 4.2 s. Scripts and procedure: [deploy/azure/README.md](../deploy/azure/README.md).
+
+```mermaid
+flowchart LR
+    user["Browser"] -->|"HTTPS (TLS 1.2+), HSTS"| fe
+    subgraph azure["Azure - South India"]
+        subgraph plan["App Service plan (Linux, B1)"]
+            fe["Frontend Web App<br/>nginx + React build<br/>public HTTPS entry point"]
+            be["Backend Web App<br/>FastAPI, fastembed, FAISS index<br/>public network access DISABLED"]
+        end
+        subgraph vnet["Virtual network onboardai-vnet (10.0.0.0/16)"]
+            appsn["appservice-subnet (10.0.2.0/24)<br/>regional VNet integration<br/>of both apps, route all"]
+            pe["private-endpoint-subnet (10.0.3.0/24)<br/>backend private endpoint"]
+            pgsn["postgres-subnet (10.0.1.0/24)<br/>delegated to PostgreSQL"]
+        end
+        pg[("Azure Database for PostgreSQL<br/>Flexible Server 16<br/>VNet-injected, public access disabled,<br/>no firewall rules, TLS required")]
+        dns["Private DNS zones<br/>privatelink.azurewebsites.net<br/>&lt;server&gt;.private.postgres.database.azure.com"]
+        acr["Azure Container Registry<br/>admin user disabled"]
+        aoai["Azure OpenAI<br/>GPT-4.1, Responses API, store=false"]
+    end
+    fe -->|"/api/* proxied"| appsn
+    appsn -->|"backend host name resolves<br/>to the private endpoint"| pe
+    pe --> be
+    be -->|"outbound through the VNet"| appsn
+    appsn -->|"TLS verify-full<br/>onboardai_app / onboardai_reader"| pgsn
+    pgsn --- pg
+    be -->|"HTTPS"| aoai
+    dns -. "name resolution inside the VNet" .- vnet
+    acr -. "image pull with system-assigned<br/>managed identity (AcrPull)" .-> plan
+```
+
+| Layer | Deployed configuration |
+|---|---|
+| Ingress | Only the frontend is public (HTTPS only, TLS 1.2 minimum, HTTP/2, FTPS disabled). nginx serves the React build, sends HSTS/CSP/X-Frame-Options/nosniff, blocks `/api/docs`, and proxies `/api/*` to the backend. |
+| Backend isolation | Backend `publicNetworkAccess = Disabled`: its main and SCM (Kudu) sites answer only through the private endpoint in `private-endpoint-subnet`; from the internet both return 403. The frontend reaches it over regional VNet integration (route all) and the private DNS zone `privatelink.azurewebsites.net`. |
+| Database | PostgreSQL Flexible Server 16, VNet-injected in `postgres-subnet`, public access disabled, no firewall rules, `require_secure_transport=on`, TLS 1.2 minimum. The backend connects with TLS certificate and host-name verification as the least-privilege roles `onboardai_app` and `onboardai_reader` (row-level security with signed employee scope); the administrator login is not used by the application. |
+| Images | Backend and frontend images in Azure Container Registry (admin user disabled), pulled by each Web App with its system-assigned managed identity (AcrPull). The FAISS index, handbook PDF and embedding model are inside the backend image. |
+| Management plane | SCM/FTP basic (publishing-credential) authentication disabled on both apps; backend SCM site private only; frontend SCM site default deny. |
+| Configuration and secrets | App settings of each Web App (encrypted at rest by App Service), set from an external secrets file that is never committed. Azure Key Vault references are a planned improvement. |
+| Health | App Service health checks: backend `/ready` (database and index), frontend `/healthz`. |
+| Data migration | One-time, inside the VNet, over an authenticated SSH tunnel to a temporary migration image; 12/12 table fingerprints identical; all temporary access removed afterwards (see project plan). |
+
+Local email/password authentication is used in production as in development; an external identity provider (for example Microsoft Entra ID) is a possible later change, not current scope.
 
 ## Historical design
 

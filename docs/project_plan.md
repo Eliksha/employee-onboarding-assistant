@@ -7,7 +7,7 @@
 **Mentor:** Kanishka Vatsa  
 **Last updated:** 24 November 2026  
 
-**Status:** Phase 1 (security hardening) ACTIVATED. **Azure integration and deployment ON HOLD.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026). M3 (engineering baseline and automated evaluation) committed. M4 (CSV import role, schema dictionary, canonical PDF RAG with versioned index, routing fixes) approved. M5 (feedback and escalation from chat, migration 007 data integrity, API docs restriction, nginx security headers) implemented and verified on disposable databases, a clone of the live database and isolated containers; **M4 + M5 committed and pushed to `dev` (`cde4538`; all four GitHub CI checks passed) and ACTIVATED on the local Docker stack (23 November 2026)** - see "M4 + M5 Local Activation" at the end of this file. Pending: handbook page-citation check and employee-level authorization check on the activated stack.
+**Status:** Phase 1 (security hardening) ACTIVATED. **Azure deployment COMPLETED and VERIFIED in production (25 November 2026, 17/17 checks) - see "Azure Deployment - Completed and Verified" at the end of this file.** Phase 2 - Hybrid SQL + RAG Orchestration Steps 2A and 2B IMPLEMENTED, MANUALLY VERIFIED and committed. Phase 3 architecture completion audit done (23 November 2026). M3 (engineering baseline and automated evaluation) committed. M4 (CSV import role, schema dictionary, canonical PDF RAG with versioned index, routing fixes) approved. M5 (feedback and escalation from chat, migration 007 data integrity, API docs restriction, nginx security headers) implemented and verified on disposable databases, a clone of the live database and isolated containers; **M4 + M5 committed and pushed to `dev` (`cde4538`; all four GitHub CI checks passed) and ACTIVATED on the local Docker stack (23 November 2026)** - see "M4 + M5 Local Activation" at the end of this file. Pending: handbook page-citation check and employee-level authorization check on the activated stack.
 
 ## 1. Milestones
 
@@ -16,7 +16,7 @@
 | M1 — Design | 31 | Charter, architecture, repository, synthetic data | Completed for local prototype |
 | M2 — Backend + AI | 32 | FastAPI, RAG, FAISS, employee data APIs, orchestration | Completed locally (RAG eval 50/50, guardrails); Azure OpenAI migration pending |
 | M3 — UI + Middleware | 33 | React dashboard, chat, checklist, support center, validation | Completed; browser E2E 16/16 |
-| M4 — Deploy + Test | 34 | Docker, Azure deployment, CI/CD, unit/integration/load/security tests | Docker + local testing completed (Step 10); CI (4 GitHub checks passing) and local load test completed (M3); M4 + M5 local activation completed (23 Nov 2026, `cde4538`); Azure deployment and CD pending |
+| M4 — Deploy + Test | 34 | Docker, Azure deployment, CI/CD, unit/integration/load/security tests | Docker + local testing completed (Step 10); CI (4 GitHub checks passing) and local load test completed (M3); M4 + M5 local activation completed (23 Nov 2026, `cde4538`); Azure deployment completed and verified in production (25 Nov 2026, 17/17); CD pending |
 | M5 — Wrap-up | After | Runbook, architecture diagrams, storyboard, slides, demo, final repository | Runbook, architecture, demo script, final test report done; slides pending |
 
 ## 2. Scope and Technology Decisions
@@ -1892,3 +1892,122 @@ $env:VERIFY_PW = '<employee password>'; .\deploy\azure\70-Verify-Deployment.ps1 
 Rollback: `90-Rollback.ps1 -PreviousTag <tag> -Execute`; migration rollback `65-Migrate-Database-InVNet.ps1 -Execute -Rollback`.
 
 **Revised estimate after the exception: about 60-75 minutes** (PostgreSQL creation 10-15, migration 15-20, image pull/start 10, verification 10).
+
+## Azure Deployment - Portal PostgreSQL Reuse and Readiness (25 November 2026)
+
+**Status: permissions verified; owner-created private resources discovered and wired into the scripts; waiting for approvals and `AZURE_PG_ADMIN_PASSWORD`.** Nothing created or modified in Azure by these scripts in this stage; nothing staged or committed (HEAD `3c0b4df` committed by the owner).
+
+| Item | Result |
+|---|---|
+| Permissions | validate-only ARM deployment of VNet + delegated subnets + service endpoint, private DNS zone + VNet link, private PostgreSQL 16, App Service VNet integration: **Succeeded** (policy and RBAC allow every type) |
+| Owner-created (portal) resources, reused | VNet `onboardai-vnet` 10.0.0.0/16; `postgres-subnet` 10.0.1.0/24 (in use by the server); server `onboardai-eliksha-db` (Ready, PostgreSQL 16, B1ms, **public access Disabled**, admin `onboardai_admin`); private DNS zone `onboardai-eliksha-db.private.postgres.database.azure.com` linked to the VNet (Completed); `appservice-subnet` 10.0.2.0/24 and `private-endpoint-subnet` 10.0.3.0/24 |
+| Finding | `appservice-subnet` is **delegated to PostgreSQL**, not `Microsoft.Web/serverFarms`, and unused: step 15 re-delegates it (and adds the `Microsoft.Web` service endpoint) - needs approval; it refuses if the subnet is in use. `private-endpoint-subnet` is left unchanged (not used by this design) |
+| App Service plan | SKU is now **B1** (was P0v3); supports VNet integration, Always On, health checks; 1 core as in the load test (backend peak ~340 MiB of 1.75 GB) |
+| Images | published `78b80ee-202611241823` reused (content = commit `3c0b4df` image inputs; digests unchanged); migration image `...-78b80ee-202611241823-migrate` built locally and checked (key-only sshd, PostgreSQL client), **not pushed** |
+| Secrets file | all required values present except **`AZURE_PG_ADMIN_PASSWORD` (missing; owner to add the portal admin password)** |
+| Scripts updated | 15 reuses VNet/PostgreSQL subnet/DNS (never creates them), reuses `appservice-subnet`, verifies the DNS link from the server; 05 records the intended server, admin and network names and accepts `-ImageTag`; config template/local config use the actual names; validator: placeholder-safe, **0 failures** |
+| Private backend ingress | unchanged design: both apps VNet-integrated in `appservice-subnet` (route all), backend admits only that subnet (default deny); SCM basic auth stays disabled unless separately approved |
+
+### Ordered next steps (each needs approval)
+
+1. `15-Provision-Network.ps1 -Execute` - re-delegate `appservice-subnet` + service endpoint, VNet integration of both apps, backend subnet-only ingress.
+2. `10-Provision-Database.ps1 -Execute` - reuses the server: `require_secure_transport=on`, TLS >= 1.2, database `onboardai`.
+3. `50-Configure-Apps.ps1 -Execute` - app settings (secrets via temporary file, private PG_HOST, proxy secret); isolation check.
+4. `65-Migrate-Database-InVNet.ps1 -Execute` - pushes the migration image, SSH migration; **needs `AZURE_PG_ADMIN_PASSWORD`; SCM basic auth only with a separate approval (`-AllowTemporaryScmBasicAuth`)**.
+5. `40-Provision-AppService.ps1 -Execute` - production images + health checks; then admin password rotation and `70-Verify-Deployment.ps1`.
+
+## Azure Deployment - Stages 1-3 Executed (25 November 2026, owner-approved: network, database configuration, app settings)
+
+| Stage | Result (verified read-only afterwards) |
+|---|---|
+| 15 Network | `appservice-subnet` (10.0.2.0/24, unused) re-delegated from PostgreSQL to `Microsoft.Web/serverFarms` + service endpoint `Microsoft.Web` (Succeeded); both Web Apps VNet-integrated into it with route-all; backend access restrictions: one Allow rule for `appservice-subnet` (priority 100), default **Deny**, SCM site restricted separately (not inheriting); direct public request to the backend -> **403**. Private DNS zone linked to `onboardai-vnet` (Completed). A false positive of the in-use guard (PowerShell `@($null).Count` = 1) stopped the first run before any change; fixed |
+| 10 Database (existing portal server) | `require_secure_transport=on`, `ssl_min_protocol_version=TLSv1.2`, database `onboardai` created; public network access **Disabled**; **0 firewall rules** |
+| 50 Settings | backend: PG_HOST = server FQDN (resolves to the private address through the linked private zone inside the VNet), PG_PORT 5432, PG_DATABASE onboardai, PG_USER onboardai_app, PG_READER_USER onboardai_reader, WEBSITES_PORT 8000, TRUSTED_PROXY_HOPS 3, Azure OpenAI deployment gpt-4.1; every secret equals the secrets-file value (compared, not printed); frontend: BACKEND_ORIGIN/HOST = discovered backend host, WEBSITES_PORT 80; proxy secret (48 chars) identical on both apps; temporary settings files deleted; isolation check passed; both apps restarted (still placeholder containers) |
+
+**Ingress as configured (accurate description):** the backend keeps its public endpoint (public DNS name) but only admits traffic from `appservice-subnet` through the `Microsoft.Web` service endpoint (default deny; anything else gets 403), plus the proxy-key header. This is **service-endpoint access restriction, not private-endpoint isolation**. Full private-endpoint isolation would additionally need a backend private endpoint (`privatelink.azurewebsites.net` zone - now allowed by policy - and a non-delegated subnet), public network access disabled on the backend, and the frontend resolving the private address; this needs an owner decision before production activation. The SCM site of the backend is not IP-restricted (needed for the migration tunnel) and requires authentication (Entra; basic auth disabled).
+
+**Private database connectivity:** control plane verified (server private, DNS zone linked, backend integrated in the VNet with route-all). Data-plane connectivity (DNS resolution to the private address + TLS verify-full connection) is verified from inside the VNet by the first step of the migration (`onboardai-in-vnet-migrate`: "TLS version" check) - our containers are not running in the backend yet.
+
+**Step 65 status:** prepared (migration image built locally, dry run against the real resources). Added a fail-fast pre-check: with SCM basic auth disabled and no `-AllowTemporaryScmBasicAuth`, it stops before any Azure change. Blockers: `AZURE_PG_ADMIN_PASSWORD` not yet in the secrets file; separate approval for temporary SCM basic auth. Validator: 0 failures.
+
+---
+
+## Azure Deployment - Stages 4-7 Executed (25 Nov 2026)
+
+### Step 65 - in-VNet database migration (SSH over the SCM tunnel)
+| Attempt | Result | Root cause | Fix |
+|---|---|---|---|
+| 1 | Rolled back automatically | Fingerprint mismatch with equal row counts: collation differs (Alpine/musl source vs Azure glibc en_US) | Fingerprints ordered with `COLLATE "C"` |
+| 2 | SSH kex reset | Production image crash-looped on the empty database (startup backoff ~4.5 min); SCM/basic-auth changes applied after the restart caused more restarts | All configuration first, then ONE stop/start |
+| 3 | Readiness window expired | Same as 2 (diagnosed from ARM container logs) | Bounded 15-minute readiness loop, tunnel restarted if it exits |
+| 4 | **SUCCEEDED** (525 s) | Final local `Remove-Item` failed: `az` is a .cmd wrapper, its python child kept `tunnel.err` open | Cleanup now kills the tunnel process TREE and retries the delete (bounded) |
+
+Attempt 4: TLS 1.3 verify-full inside the VNet; 12/12 table fingerprints identical; migrations 005/008 applied;
+scope key matched; application-role startup checks passed. No duplicate migration was started.
+
+Cleanup verified in Azure: SCM and FTP basic auth `false`, publishing password regenerated, temporary
+`migration-operator` SCM rule removed (SCM default Deny, no allow rules), `MIGRATION_SSH_AUTHORIZED_KEY` deleted,
+backend back on the production image; leftover tunnel process stopped; local work directory (key pair, dump)
+overwritten and deleted.
+
+### Step 40 - production activation
+Both apps on `78b80ee-202611241823` (managed identity pull), HTTPS only, TLS 1.2+, FTPS disabled, basic auth
+disabled, health checks `/ready` (backend) and `/healthz` (frontend). `/api/health` via the frontend:
+`{"status":"ok","database":"ok"}`.
+
+### Step 45 - backend private endpoint
+* `private-endpoint-subnet` (10.0.3.0/24): unused PostgreSQL delegation removed; PE network policies disabled.
+* Private DNS zone `privatelink.azurewebsites.net` + VNet link `onboardai-vnet-webapps`.
+* Private endpoint `onboardai-eliksha-backend-pe` (10.0.3.4): Succeeded / Approved; DNS zone group `default`
+  (A records for the main and SCM host names).
+* Backend `publicNetworkAccess = Disabled`. Main and SCM sites return 403 from the internet; the frontend
+  (VNet-integrated, route-all) reaches the backend only through the private endpoint (frontend restarted so nginx
+  re-resolves the backend host).
+* Bug found and fixed: `az network private-endpoint dns-zone-group show` returns `{}` with exit 0 when the group is
+  missing, so the first run skipped creating it; the group was created and the script now checks for a real object.
+
+### Database administrator password rotation
+Rotated to a 40-character random value that was never printed or stored (temporary file overwritten and deleted).
+The application uses only `onboardai_app` (verified: no app setting references the admin login), so it was not
+affected. The old `AZURE_PG_ADMIN_PASSWORD` in the external secrets file is now INVALID; the owner resets it when admin
+access is needed (`az postgres flexible-server update ... --admin-password`) and stores it in the secrets file.
+
+### Step 70 - verification
+Public checks 8/8 PASS: frontend health, HSTS/CSP/X-Frame-Options/nosniff, API health with database ok, API docs and
+readiness details not public, sign-in required, generic login error, backend not usable directly.
+Signed-in checks (cookie flags, own data, cross-employee refusal, grounded GPT-4.1 answer, fallback, history,
+sign-out) need an employee password and are run by the owner:
+`$env:VERIFY_PW = '<password>'; .\deploy\azure\70-Verify-Deployment.ps1 -BaseUrl <frontend> -BackendUrl <backend> -EmployeeEmail <email> -PasswordEnv VERIFY_PW`
+
+### Final posture
+| Component | State |
+|---|---|
+| PostgreSQL 16 | Private (VNet-injected), public access Disabled, TLS verify-full, no firewall rules |
+| Backend | Public network access Disabled; reachable only via private endpoint; SCM/FTP basic auth off |
+| Frontend | Public HTTPS entry point; SCM/FTP basic auth off |
+| Validator | `Test-DeploymentScripts.ps1`: 0 failures |
+
+---
+
+## Azure Deployment - Completed and Verified (25 Nov 2026)
+
+**Result: SUCCESS.** Final authenticated production verification (`deploy/azure/70-Verify-Deployment.ps1`, run by the
+owner with an employee account): **17/17 checks passed**.
+
+| Group | Result | Checks |
+|---|---|---|
+| Public | 8/8 | frontend health; HSTS, CSP self-only, X-Frame-Options DENY, nosniff; API health with database ok; API docs not public; readiness details not public; employee data requires sign-in; generic login error; backend not usable directly |
+| Authenticated | 9/9 | sign-in with Secure/HttpOnly/SameSite=Strict cookie; own profile; own checklist; another employee's data refused; grounded GPT-4.1 answer citing handbook.pdf page 3; out-of-scope safe fallback; chat history; sign-out; session terminated |
+| Latency | PASS | live RAG answer 4232 ms (target < 5000 ms) |
+
+Deployed state (unchanged since verification): frontend Web App is the only public endpoint; backend Web App public
+network access Disabled, reachable only via its private endpoint; PostgreSQL Flexible Server 16 private (VNet-injected,
+no firewall rules, TLS verified); images `78b80ee-202611241823` from ACR via managed identity; SCM/FTP basic auth
+disabled on both apps; database administrator password rotated (unstored).
+
+Documentation updated: `README.md` (status, Azure deployment section, limitations), `docs/architecture.md` (deployed
+Azure network diagram and configuration table), `deploy/azure/README.md` (actual network, executed order, step 45,
+migration cleanup, 17-check verification, admin password), `docs/runbook.md` (pointer to the Azure runbook).
+
+Milestone M4 (Deploy + Test): Azure deployment DONE. Remaining (outside the deployed system): commit and push of the
+deployment scripts and documentation; continuous deployment; Key Vault references for secrets.

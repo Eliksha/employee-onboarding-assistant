@@ -34,5 +34,11 @@
     # frontend app, its nginx, App Service front end of the backend). Verify after deployment (README step 7).
     TrustedProxyHops = 3
 
+    # Private networking (owner-created VNet and PostgreSQL subnet are reused; only the App Service subnet is added)
+    VnetName        = 'onboardai-vnet'
+    PgSubnetName    = 'postgres-subnet'
+    AppSubnetName   = 'appservice-subnet'
+    AppSubnetPrefix = '10.0.2.0/24'
+
     Tags = @{ project = 'onboardai'; owner = 'eliksha'; environment = 'capstone' }
 }
