@@ -2508,3 +2508,87 @@ and the Mermaid views in `docs/architecture.md` remain).
   backend Web App), and the frontend Web App is public (VNet integration is outbound only).
 * Validation: 10 Markdown documents, 53 relative links/images, 0 broken; README and architecture.md both resolve the
   new image. No application code, deployment or Git operation.
+
+---
+
+## Security Incident - Final Verification and Closure (12:33 UTC)
+
+Scope: exposure window from issue of the operator's ARM access token (09:04:58 UTC; printed ~09:10) to expiry of the
+ACR refresh token (12:10:00 UTC). Verified at 12:33 UTC; both tokens past expiry (ARM +6906 s, ACR +1418 s). All checks
+read-only; no Azure change, no redeploy, no Git write; no token value printed.
+
+| # | Check | Evidence | Result |
+|---|---|---|---|
+| 1 | Activity log 08:50 UTC -> 12:33 UTC | 74 events, 0 from an unexpected caller or IP. Operator: 27 publishing-profile reads (made internally by `az webapp sitecontainers`), 1 federated-credential write at 09:07:03 (the approved OIDC-subject fix, before the ~09:10 exposure). CD identity: 2 `sitecontainers/write` (CD #4 deployments) + 7 publishing-profile reads | PASS |
+| 2a | Role assignments | 7 in the resource group and its resources, all created before the window (operator role and App Insights publisher 23 Nov; AcrPull x2 24 Nov; CD AcrPush + Website Contributor x2 25 Nov 06:21); 0 created in the window; no role-assignment operation in the log | PASS |
+| 2b | Federated credentials / identities | 1 user-assigned identity (`onboardai-github-cd`) with 1 credential (`github-production`, repository + `production` environment subject) | PASS |
+| 2c | Application settings | no `config/write` or `appsettings` operation in the window; backend 16 / frontend 6 settings, 0 connection strings (counts only) | PASS |
+| 2d | Network / database configuration | no network, private-endpoint, DNS, firewall, administrator or server write in the window; private endpoint Succeeded/Approved; 0 NSGs; resource inventory 18 (unchanged) | PASS |
+| 3 | Image digests (full SHA-256) | previous release `78b80ee-202611241823`: backend `sha256:adbb53ceb9b622225b0823ce0aedb905b8f348b1be66b11c3405ba497711c1e8`, frontend `sha256:a26b2cfd5c00307e85d5cc6e677ed3e0132f7cd0a6910327dc964f14c5aa7584` = push-time records (24 Nov, operator machine); CD #4 `b81eff938637-45595741589-1`: backend `sha256:8056c5e66dfb920b9a4b8f3429c1a49dd5f68d303c9ddf032603c82ca80ccc37`, frontend `sha256:9778bade6b775cecc9f23ac3742dd6def5dc3f1e8e039a93b77b1075dd036b42` = CD #4 records; only expected repositories/tags; tag writes in the window: only CD #4's own pushes (10:36:26, 10:36:34) | PASS |
+| 4 | Running release | both App Services Running `b81eff938637-45595741589-1` | PASS |
+| 5 | Private access | backend public access Disabled (direct request 403); PostgreSQL public access Disabled, Ready, `require_secure_transport=on` | PASS |
+| 6 | Health | frontend `/healthz` 200; `/api/health` 200 `{"status":"ok","database":"ok"}` (backend + database) | PASS |
+| 7 | New credentials | 0 new role assignments; 1 federated credential (expected); ACR admin user disabled, anonymous pull disabled, 0 ACR tokens, 0 custom scope maps; SCM/FTP basic auth off on both apps; no `listKeys`, `regenerateKey`, `listCredentials`, `newpassword` or basic-auth policy write in the log | PASS |
+| 8 | Token leakage to Git / GitHub | 0 JWT-like strings in all commits and branches; 0 in the working tree; 0 token-like strings in 22 GitHub Actions run logs since 08:30 UTC; local transcript already redacted (0 occurrences) | PASS |
+
+**Audit limitations (documented, cannot be closed by evidence):**
+* No registry diagnostic logs: image pulls (data-plane reads) during the window cannot be audited. Impact is limited
+  to image confidentiality - both images were scanned (Trivy secret scan, all severities: 0 secrets; no `.env`, keys,
+  dumps or databases); pushes/overwrites are excluded by the tag timestamps and digest verification above.
+* The activity log records writes and POST actions, not GET reads: non-secret resource configuration could have been
+  read; every secret-bearing operation is a POST action and none occurred.
+* Entra ID sign-in logs are not accessible in this sandbox tenant (requires Entra ID P1 and a directory role), so token
+  use cannot be traced at the identity provider; all ARM activity was attributed to known principals and IPs.
+* The exposed values were also processed by the AI assistant service as part of the session (no other third party).
+* Not related to the tokens: CD run logs #2-#4 contain the seven deployment identifiers (not credentials); moving them
+  to `production` environment secrets masks them in future runs.
+
+**Decision: incident CLOSED.** Justification (not expiry alone): both tokens are expired; the operator's sessions were
+revoked (Graph confirmed; enforcement observed); no unauthorized caller, write, secret-reading action, role assignment,
+credential or configuration change occurred in the window; registry contents and both releases' full digests match
+independent records; production runs the verified CD #4 release with private networking intact and healthy; no token
+reached Git or GitHub Actions; the root cause (mask commands printed outside GitHub Actions) is fixed in
+`deploy/azure/cd-release.sh`. Recommended follow-ups: enable registry diagnostic settings (repository events) to the
+existing Log Analytics workspace, and store the CD identifiers as environment secrets.
+
+---
+
+## Post-CD Authenticated Production Verification (CD #4 release)
+
+Release under test: `b81eff938637-45595741589-1` (CD #4, both App Services). Run by the owner with
+`deploy/azure/70-Verify-Deployment.ps1` and a secure credential prompt (no credential stored or printed). The
+latency threshold and application code are unchanged.
+
+| Run | Result | Notes |
+|---|---|---|
+| Pre-CD release `78b80ee-202611241823` (kept for reference) | **17/17** | 8 public + 9 signed-in; grounded GPT-4.1 answer in 4232 ms |
+| CD #4, run 1 | **16/17** | 8/8 public; 8/9 signed-in. The only failed assertion: grounded GPT-4.1 answer latency **5086 ms** against the < 5000 ms target. The response itself was HTTP 200, factually correct, grounded, cited handbook.pdf page 3, retrieval score 0.701, `found=true` |
+| CD #4, run 2 | **17/17** | grounded GPT-4.1 answer 2135 ms |
+| CD #4, run 3 | **17/17** | grounded GPT-4.1 answer 1752 ms |
+
+All runs are recorded as executed, successful or not. The latency observation is a performance finding, unrelated to
+the closed security incident.
+
+### Post-CD production verification - COMPLETE
+
+| Run | Release | Result | Grounded GPT-4.1 answer latency |
+|---|---|---|---|
+| Pre-CD | `78b80ee-202611241823` | 17/17 | 4232 ms |
+| CD #4 run 1 | `b81eff938637-45595741589-1` | 16/17 | 5086 ms (target < 5000 ms - the only failed assertion) |
+| CD #4 run 2 | `b81eff938637-45595741589-1` | 17/17 | 2135 ms |
+| CD #4 run 3 | `b81eff938637-45595741589-1` | 17/17 | 1752 ms |
+
+**Post-CD aggregate (3 runs):** 50/51 assertions passed (98.04%); public checks 24/24; signed-in checks 26/27; all
+functional assertions passed (sign-in and cookie flags, own profile and checklist, cross-employee refusal, grounded
+answer with handbook.pdf page 3 citation, out-of-scope fallback, history, sign-out, session ended). Latency: mean 2991
+ms, median 2135 ms, minimum 1752 ms, maximum 5086 ms. The single failure - run 1 exceeding the latency target by 86 ms
+with an otherwise correct, grounded, cited answer (HTTP 200, retrieval score 0.701, found=true) - is preserved as
+recorded; the threshold was not changed. Typical observed response time is below 5 s; with n = 3 the latency estimate
+is indicative only. Status: **post-CD production verification complete**. The security incident remains **closed**
+(unrelated performance observation).
+
+Documentation consistency: README (results at a glance, testing), `deploy/azure/README.md` (status, verification,
+CD section), `docs/runbook.md` (CD status), `docs/test_report.md` and `docs/load_test_report.md` (current-results notes)
+now state the first-release 17/17 and the CD #4 50/51 results and CD as operational; no "not yet executed" or "no
+successful release" statement remains outside the historical entries of this plan. The final assessment PDF and PPT
+are deferred (drafts exist).

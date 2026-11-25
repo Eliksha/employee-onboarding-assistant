@@ -38,7 +38,10 @@ OnboardAI helps new employees find onboarding information - leave, payroll, bene
 
 ## Results at a glance
 
-- **Production verification on Azure:** 17/17 checks (8 public, 9 signed-in); grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms (target < 5000 ms).
+- **Production verification on Azure** (`70-Verify-Deployment.ps1`, 8 public + 9 signed-in checks per run):
+  - First release: 17/17; grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms (target < 5000 ms).
+  - CD-deployed release, 3 runs: **50/51** assertions (98.04%) - public 24/24, signed-in 26/27, every functional check passed.
+  - Grounded-answer latency 5086 / 2135 / 1752 ms (median 2135 ms, mean 2991 ms); the single failed assertion was the first run exceeding the 5000 ms target by 86 ms. Typical response time is below 5 s; the sample is small.
 - **Continuous delivery:** a verified production release built, scanned and deployed both images through the approval-gated pipeline; deployed digests verified, configuration unchanged, 8/8 public checks.
 - **RAG evaluation (GPT-4.1):** 50/50 - index 6, retrieval 17, grounding 17, unknown questions 7, prompt injection 3; retrieval MRR 0.971.
 - **Held-out hybrid evaluation (62 questions, GPT-4.1):** routing 62/62, records answers 26/26, grounded handbook answers 30/30, mixed answers 10/10, unauthorized refused 8/8, out-of-scope fallback 6/6.
@@ -357,7 +360,7 @@ All commands are PowerShell from the project root. Full details: [docs/runbook.m
 - **RAG evaluation:** `python -m scripts.rag_eval` (needs Azure OpenAI settings; `--no-llm` runs deterministic checks only). GPT-4.1 result: **50/50**.
 - **Load test:** `bash tests/load/run_isolated_load_test.sh` - see [docs/load_test_report.md](docs/load_test_report.md) (287 requests, 0 failures).
 - **CSV import / schema dictionary:** `python -m scripts.import_csv data/csv` / `python -m scripts.schema_dictionary --check`.
-- **Production verification:** `deploy/azure/70-Verify-Deployment.ps1` - 8 public checks (health, security headers, hidden docs, sign-in required, generic login error, backend not directly reachable) and 9 signed-in checks (secure cookie, own data, other employees refused, grounded GPT-4.1 answer with citation, fallback, history, sign-out). Result: **17/17**.
+- **Production verification:** `deploy/azure/70-Verify-Deployment.ps1` - 8 public checks (health, security headers, hidden docs, sign-in required, generic login error, backend not directly reachable) and 9 signed-in checks (secure cookie, own data, other employees refused, grounded GPT-4.1 answer with citation, fallback, history, sign-out). Results: first release **17/17**; CD-deployed release **50/51** over 3 runs (one latency assertion at 5086 ms; all functional checks passed).
 
 ## Azure deployment
 
