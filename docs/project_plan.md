@@ -2011,3 +2011,65 @@ migration cleanup, 17-check verification, admin password), `docs/runbook.md` (po
 
 Milestone M4 (Deploy + Test): Azure deployment DONE. Remaining (outside the deployed system): commit and push of the
 deployment scripts and documentation; continuous deployment; Key Vault references for secrets.
+
+---
+
+## Submission Cleanup (A1-A13) and CD Feasibility (25 Nov 2026)
+
+**Scope:** owner-approved priorities 1-4 of the read-only audit at commit `df18ffd` (CI run #7 passed). B1-B4 deferred;
+C1-C8 not implemented. No runtime application logic, database schema, migration, record, backup, Azure resource or
+production image was changed; no image was rebuilt or redeployed.
+
+### Changes
+| ID | File(s) | Change |
+|---|---|---|
+| A1-A5 | `README.md` | Rate limiting (shared `login_failures` table on PostgreSQL), CSP (self-only fonts), HR/IT escalation queue, migrations 005-008 (PostgreSQL), evaluation rows now show current GPT-4.1 results (RAG 50/50, held-out 62/62) with Groq runs labelled historical |
+| README review | `README.md` | Status rows for CI and CD (CD not implemented); repository layout (deploy/azure, migrations); configuration table completed (rate-limit store, reader role, TLS, pool, proxy key/hops, API docs); ingestion description (canonical PDF, 2-sentence windows, 65 chunks); `hr` role, `/ready` and `/hr/escalations` endpoints; production security summary; CI run #7 and 17/17 production verification; test counts 701 / 133 |
+| A6 | `frontend/README.md` | Sign-in instead of the removed "employee selector"; Azure build and GPT-4.1 statements replace "Azure is the target" / "Groq is temporary" |
+| A7 | `docs/runbook.md` | Rollback no longer points to the Groq commit; Azure rollback via `90-Rollback.ps1` |
+| A8 | `tests/load/run_isolated_load_test.sh` | Usage comment: Azure OpenAI settings instead of a Groq key |
+| A9 | `docs/final_local_test_report.md`, `docs/test_report.md`, `docs/hybrid_eval_report.md`, `docs/load_test_report.md` | One-line "historical report" note under each title (Groq-era evidence kept unchanged), linking the current Azure results |
+| A10 | `.env.example` | 23 more settings documented as commented entries showing the code defaults (no credentials; behaviour unchanged when copied) |
+| A11 | `scripts/hybrid_eval.py`, `scripts/rag_eval.py` | Unused `statistics` / `json` imports removed |
+| A12 | `tests/integration/test_auth.py`, `tests/unit/test_rag_eval.py`, `tests/integration/test_frontend_contract.py` | Unused `re` / `json` / `TestClient` imports removed (no test removed or changed) |
+| A13 | 8 `.gitkeep` files (`.github/workflows`, `backend/{middleware,routes,schemas,services}`, `tests/{integration,load,unit}`) | Deleted; `data/index/.gitkeep` kept (re-included by `.gitignore`) |
+
+Image note: `backend/` and `frontend/` are build contexts, so the `.gitkeep` deletions and `frontend/README.md` change the
+inputs of a FUTURE image build (no runtime effect; `frontend/README.md` stays in the build stage only). The running
+images (`78b80ee-202611241823`) are unaffected.
+
+### Verification
+| Check | Result | Baseline |
+|---|---|---|
+| Backend suite (Docker test image, Python 3.12, repo read-only) | **701 passed**, 133 skipped (live-PostgreSQL suites without a disposable server) | 701 passed - no regression |
+| Live PostgreSQL suites | not re-run: no PostgreSQL test or runtime file changed | 133 passed (24 Nov) |
+| Frontend | not re-run: only `frontend/README.md` changed | 11 passed, lint clean, build OK |
+| `Test-DeploymentScripts.ps1` | 69 az command lines, **0 failures** | 0 failures |
+| `docker compose config --quiet` | valid | valid |
+| Secret scan (all 181 tracked text files x 16 secret/identifier values) | **0 hits**; generic credential patterns: only the fake token in `tests/unit/test_rag_eval.py` | 0 hits |
+
+### CD feasibility (read-only; nothing created)
+* **Permissions:** the operator account has the custom role "Resource Group Admin1 (No Delete)" on the resource group,
+  including `Microsoft.ManagedIdentity/userAssignedIdentities/*`, `Microsoft.Authorization/roleAssignments/*`,
+  `Microsoft.Web/*`, `Microsoft.ContainerRegistry/*`; no `roleDefinitions/write` (built-in roles only). The tenant allows
+  users to create app registrations. **No permission blocker.**
+* **OIDC:** user-assigned managed identity in the resource group with a federated credential for
+  `repo:<owner>/<repo>:environment:production` (GitHub environment with required reviewer); `azure/login` with client,
+  tenant and subscription IDs as non-secret variables; no client secret, no publish profile, SCM basic auth stays off.
+* **Least privilege:** `AcrPush` on the registry; `Website Contributor` on the two Web Apps only; no database,
+  network, Key Vault or resource-group role.
+* **Publishing:** ACR Basic with public network access (required for GitHub-hosted runners; Basic has no firewall);
+  build both images with `deploy/azure/*.Dockerfile`, immutable commit-SHA tags, the existing secret scan before push.
+  The backend image bundles the FAISS index, which is git-ignored: the pipeline must build it from `data/raw`
+  (as CI does) and validate it.
+* **Deployment:** ARM only - `az webapp sitecontainers update` (main container image, managed-identity pull) + restart,
+  backend first, then frontend. The backend SCM site is private and is not needed.
+* **Health and rollback:** poll the public frontend `/healthz` and `/api/health` (proves frontend -> private endpoint
+  -> backend -> private PostgreSQL) plus the 70-Verify public checks; on failure re-point both apps to the previous tag
+  (`90-Rollback.ps1` logic) and re-verify.
+* **Networking:** GitHub-hosted runners need only the ARM API, ACR and the public frontend; backend private endpoint,
+  disabled backend public access and the private database are unchanged. Database migrations stay manual
+  (in-VNet procedure, step 65) - a runner must never reach the database.
+* **Constraints:** B1 plan has no deployment slots (brief restart per deploy, no blue/green); signed-in verification
+  needs a dedicated test account password as a GitHub environment secret (or public checks only); sandbox subscription
+  lifetime.

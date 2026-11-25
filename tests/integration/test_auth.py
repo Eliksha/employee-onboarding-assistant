@@ -1,5 +1,4 @@
 """Authentication, session, CSRF, rate-limiting and authorization tests (isolated SQLite, no network)."""
-import re
 
 import pytest
 from argon2 import PasswordHasher

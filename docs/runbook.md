@@ -324,7 +324,7 @@ docker compose --env-file $secrets exec backend python -c "from backend.config i
 
 Then ask in the browser: "Is a cab provided if I stay late at work?" (expect a `handbook.pdf` citation with "(p. 3)") and "What is the capital of France?" (expect the fallback).
 
-**Rollback:** rebuild the backend from the previous commit (`445ffce`, Groq) with the old `.env` values; no database or index change is involved. **Key rotation:** regenerate the key in the Azure portal, update `AZURE_OPENAI_API_KEY` in the secrets file, recreate the backend (`up -d --no-deps backend`).
+**Rollback:** Groq has been removed and is not a supported fallback. Locally, rebuild the backend from the previous verified commit; on Azure, use `deploy/azure/90-Rollback.ps1 -PreviousTag <tag>` (previous images; no database or index change is involved). **Key rotation:** regenerate the key in the Azure portal, update `AZURE_OPENAI_API_KEY` in the secrets file, recreate the backend (`up -d --no-deps backend`).
 
 **Evaluation against Azure** (sends only synthetic handbook passages and questions; writes no database rows):
 

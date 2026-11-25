@@ -1,5 +1,7 @@
 # Hybrid Chat Evaluation Report (M4)
 
+> **Historical report (kept as assessment evidence).** M4 run of 23 Nov 2026 with the earlier temporary Groq LLM; the same evaluation with Azure OpenAI GPT-4.1 is in [azure_eval_report.md](azure_eval_report.md). Current results: [README - Testing](../README.md#testing), [azure_eval_report.md](azure_eval_report.md) (GPT-4.1, 24 Nov 2026) and the Azure production verification (17/17, 25 Nov 2026) in [project_plan.md](project_plan.md).
+
 Date: 2026-11-23 | Commit: `7e2e866` (plus uncommitted changes) | Python 3.14.8 on Windows
 
 Environment: HTTP against an isolated backend (http://127.0.0.1:8301) | LLM: `qwen/qwen3.8-27b` via Groq (temporary)

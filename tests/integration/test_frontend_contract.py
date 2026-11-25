@@ -6,7 +6,6 @@ route that does not exist, fail in CI before reaching the browser. Uses the isol
 import re
 
 import pytest
-from fastapi.testclient import TestClient
 
 from backend.config import ROOT
 from backend.main import app

@@ -1,5 +1,7 @@
 # Final Local Test Report - OnboardAI
 
+> **Historical report (kept as assessment evidence).** Local release test of 21 Nov 2026 with the earlier temporary Groq LLM, before Azure OpenAI and the Azure deployment. Current results: [README - Testing](../README.md#testing), [azure_eval_report.md](azure_eval_report.md) (GPT-4.1, 24 Nov 2026) and the Azure production verification (17/17, 25 Nov 2026) in [project_plan.md](project_plan.md).
+
 **Step 10 - Final local testing and release readiness**
 Date: 21 November 2026 | Commit under test: `9af56cc` (branch `dev`) | Tester: Eliksha Maheshwari (with AI-assisted test automation)
 

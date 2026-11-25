@@ -3,7 +3,6 @@
 LLM-dependent checks (grounding, abstention, prompt injection) live in
 `python -m scripts.rag_eval` and are reported separately.
 """
-import json
 import re
 from types import SimpleNamespace
 

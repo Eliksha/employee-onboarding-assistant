@@ -18,7 +18,6 @@ Usage (project root, venv active):
     python -m scripts.rag_eval --no-llm        # deterministic categories only
 """
 import argparse
-import json
 import re
 import sys
 import time

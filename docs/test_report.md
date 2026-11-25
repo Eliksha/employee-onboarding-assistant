@@ -1,5 +1,7 @@
 # Test Report - Day 32 (15 test questions)
 
+> **Historical report (kept as assessment evidence).** Day 32 run with the earlier temporary Groq LLM (`qwen/qwen3.8-27b`); the application now uses Azure OpenAI GPT-4.1. Current results: [README - Testing](../README.md#testing), [azure_eval_report.md](azure_eval_report.md) (GPT-4.1, 24 Nov 2026) and the Azure production verification (17/17, 25 Nov 2026) in [project_plan.md](project_plan.md).
+
 Model: `qwen/qwen3.8-27b` | Threshold: `0.65` | Top-k: `4`
 
 **Auto-check result: 15/15 passed.** CHECK = review the answer manually.

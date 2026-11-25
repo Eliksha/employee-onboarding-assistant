@@ -1,5 +1,7 @@
 # Load Test Report (M3, re-run in M4)
 
+> **Historical report (kept as assessment evidence).** Local load test of 23 Nov 2026 (records questions only; the LLM was the earlier temporary Groq service and was excluded on purpose). It was not repeated on Azure. Current results: [README - Testing](../README.md#testing), [azure_eval_report.md](azure_eval_report.md) (GPT-4.1, 24 Nov 2026) and the Azure production verification (17/17, 25 Nov 2026) in [project_plan.md](project_plan.md).
+
 Date: 2026-11-23 | Latest run: M4 working tree on commit `7e2e866` (PDF index mounted read-only) | Tool: locust 2.47.0 (`tests/load/locustfile.py`)
 
 ## Environment

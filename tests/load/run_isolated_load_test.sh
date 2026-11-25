@@ -11,7 +11,7 @@
 #
 # Usage (repository root, Git Bash or Linux; Docker and the dev requirements installed):
 #   bash tests/load/run_isolated_load_test.sh [output-dir]          # load test only
-#   WITH_EVAL=1 bash tests/load/run_isolated_load_test.sh            # + HTTP evaluation (uses .env Groq key)
+#   WITH_EVAL=1 bash tests/load/run_isolated_load_test.sh            # + HTTP evaluation (uses the Azure OpenAI settings in .env)
 # Tunables: USERS (10), SPAWN_RATE (2), DURATION (60s), PORT (8301), PY (python interpreter),
 #           INDEX_SRC (FAISS index folder mounted read-only; default data/index)
 set -euo pipefail
