@@ -1,6 +1,6 @@
 # Load Test Report (M3, re-run in M4)
 
-> **Historical report (kept as assessment evidence).** Local load test of 23 Nov 2026 (records questions only; the LLM was the earlier temporary Groq service and was excluded on purpose). It was not repeated on Azure. Current results: [README - Testing](../README.md#testing), [azure_eval_report.md](azure_eval_report.md) (GPT-4.1, 24 Nov 2026) and the Azure production verification (17/17, 25 Nov 2026) in [project_plan.md](project_plan.md).
+> **Historical report (kept as assessment evidence).** Local load test of 23 Nov 2026 (records questions only; the LLM was the earlier temporary Groq service and was excluded on purpose). It was not repeated on Azure. Current results: [README - Testing](../README.md#testing), the GPT-4.1 evaluations in [project_plan.md](project_plan.md) and the Azure production verification (17/17, 25 Nov 2026) in [project_plan.md](project_plan.md).
 
 Date: 2026-11-23 | Latest run: M4 working tree on commit `7e2e866` (PDF index mounted read-only) | Tool: locust 2.47.0 (`tests/load/locustfile.py`)
 
@@ -16,7 +16,7 @@ Date: 2026-11-23 | Latest run: M4 working tree on commit `7e2e866` (PDF index mo
 | Load profile | 10 users, spawn rate 2 users/s, 60 s, think time 1-3 s per user; each user signs in once (synthetic EMP001 account) |
 | Task mix (weights) | records chat 3, checklist 3, leave balances 2, payroll calendar 1, history 1, health 1 |
 
-Handbook (LLM) questions are excluded on purpose: they would measure the external Groq service and its rate limits, not this application. Records chat still exercises routing, the reader role, scope signing, RLS and one chat-history write per request. Handbook latency is measured separately in `docs/hybrid_eval_report.md`.
+Handbook (LLM) questions are excluded on purpose: they would measure the external Groq service and its rate limits, not this application. Records chat still exercises routing, the reader role, scope signing, RLS and one chat-history write per request. Handbook latency is measured separately by `scripts/hybrid_eval.py` (results in `docs/project_plan.md`).
 
 ## Results - M4 re-run (locust CSV, `loadtest_stats.csv`)
 

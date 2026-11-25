@@ -2350,3 +2350,161 @@ expired as well.
 ## Documentation Status Alignment and Release PR (25 Nov 2026)
 
 CD status wording aligned in README.md, docs/architecture.md, deploy/azure/README.md, docs/runbook.md and docs/submission_evidence.md: CD is implemented; runs #1-#3 stopped safely before any production change (causes fixed: GitHub environment setup, OIDC subject format); no successful release yet. Earlier "not yet executed" statements in this file are kept as historical record. GitHub CLI 2.105.0 installed from the official, checksum- and signature-verified MSI; the owner signed in. Changes committed to `dev`, pull request `dev` -> `main` opened; CI checked on the pull request.
+
+---
+
+## CD Operational - First Successful Production Release, CD #4 (25 Nov 2026)
+
+**Path to release:** CD hardening commit `81cda7a` (identifiers read as `secrets.X || vars.X` so they are masked once
+stored as environment secrets; new post-deploy registry-integrity step) - backend suite 718 passed, CD tests 17 passed,
+actionlint/shellcheck clean. Branch protection enabled on `main` (4 required CI checks, up to date, admins included,
+no force-push/deletion). PR #8 updated with `main`, CI green (8/8), reviewed (only CD workflow, tests, docs - no
+application or infrastructure files), merged at 10:29:46 UTC: merge commit `b81eff93863741c68ed922a29f4e8df85159437b`.
+CI #27 on `main`@`b81eff9`: success (all 4 jobs).
+
+**CD #4** (https://github.com/Eliksha/employee-onboarding-assistant/actions/runs/45595741589), commit `b81eff9`,
+10:31:07 -> 10:40:04 UTC, approved by the owner in the protected `production` environment:
+| Stage | Result |
+|---|---|
+| Gate | main + confirmation; CI #27 success for the exact commit; `production` has required reviewer + branch policy |
+| Build (no Azure access) | index rebuilt, 65 chunks; validation 6/6 + 17/17, MRR 0.971; images built (backend build re-verified index/model/documents); smoke checks; Trivy 0 HIGH/CRITICAL and 0 secrets in both images |
+| Release | 7 variables validated; scanned image ids matched; **OIDC sign-in succeeded** (Azure CLI 2.93.0); context check passed; rollback point `78b80ee-202611241823`; production healthy before release |
+| Images | tag `b81eff938637-45595741589-1`; backend `sha256:8056c5e66dfb920b9a4b8f3429c1a49dd5f68d303c9ddf032603c82ca80ccc37`; frontend `sha256:9778bade6b775cecc9f23ac3742dd6def5dc3f1e8e039a93b77b1075dd036b42` |
+| Deploy + verify | backend 10:36:35, healthy 3/3 at 10:38:00; frontend 10:38:00, healthy 3/3 at 10:39:26; deployed tags == pushed digests; configuration unchanged apart from the image; **8/8 public checks**; rollback skipped (not needed) |
+
+**Independent verification (10:48 UTC, operator account, read-only):** both apps run the new tag; registry digests
+equal the job summary; rollback images `78b80ee-202611241823` unchanged; backend public access Disabled, private
+endpoint Approved; PostgreSQL public access Disabled, `require_secure_transport=on`; HTTPS only, TLS 1.2, FTPS off and
+SCM/FTP basic auth off on both apps; CD identity still only AcrPush + 2x Website Contributor and 1 federated
+credential; public checks 8/8 (Windows PowerShell 5.1); `/api/openapi.json` and `/api/redoc` 404; backend SCM 403;
+HTTP -> HTTPS 301. Activity log 08:50 UTC -> 10:49 UTC: 52 events, 0 unexpected callers/IPs; the CD identity performed
+only 2 `sitecontainers/write` (the two deployments) and 7 publishing-profile reads made internally by the CLI.
+
+**Status:** CD **operational** (first successful, verified release). The 9 signed-in checks for this release require
+the owner's account (no approved test credential in GitHub) - pending owner run.
+
+**Security follow-up:** the exposed ARM access token lapsed at 10:38:32 UTC; the ACR refresh token lapses at
+12:10 UTC (not revocable on the Basic tier) - compensated by the pre-release digest check and the in-pipeline digest
+verification, both passed. CD logs #2-#4 contain the seven identifiers (not credentials) in the validation step's
+header because they are stored as environment variables; storing them as `production` environment secrets (same
+names) masks them in future runs without a code change. `deploy/azure/README.md`, `docs/architecture.md` and
+`docs/runbook.md` still describe CD as not having completed a release (outside the owner's requested update scope).
+
+### CD #4 deployment re-verification (read-only, 11:02 UTC)
+
+Reference values from the CD #4 release job (push-step log; the job summary is built from the same step outputs and
+is not exposed by the GitHub API): tag `b81eff938637-45595741589-1`, backend
+`sha256:8056c5e66dfb920b9a4b8f3429c1a49dd5f68d303c9ddf032603c82ca80ccc37`, frontend
+`sha256:9778bade6b775cecc9f23ac3742dd6def5dc3f1e8e039a93b77b1075dd036b42`.
+
+| Check | Observed | Result |
+|---|---|---|
+| Backend configured image tag | `b81eff938637-45595741589-1` | PASS |
+| Backend registry digest of that tag | equals CD #4 (`sha256:8056c5e6...`) | PASS |
+| Frontend configured image tag | `b81eff938637-45595741589-1` | PASS |
+| Frontend registry digest of that tag | equals CD #4 (`sha256:9778bade...`) | PASS |
+| Both App Services | Running | PASS |
+| Frontend `/healthz` | HTTP 200 | PASS |
+| Backend via frontend `/api/health` | HTTP 200 `{"status":"ok","database":"ok"}` | PASS |
+| Backend direct access | HTTP 403 (private) | PASS |
+| Remote `main` | `b81eff9` = deployed commit | PASS |
+| Application/image-input changes since `b81eff9` (backend, frontend, data/raw, requirements, Azure Dockerfiles, nginx, entrypoint) | 0 committed, 0 uncommitted | PASS |
+
+Only documentation files are modified locally (README.md, docs/project_plan.md, docs/submission_evidence.md). No
+Azure resource was changed and nothing was redeployed.
+
+---
+
+## Documentation Consolidation - Preserved Evidence from Removed Reports
+
+At the owner's request the following reports were removed from `docs/`; byte-identical copies are archived outside
+the repository in `..\submission\archived-docs\` for the final PDF/PPT. Their verified results are preserved here.
+
+### RAG evaluation (`rag_eval_report.md`, Azure OpenAI GPT-4.1)
+| Category | Pass | Fail |
+|---|---|---|
+| A. Knowledge base / index availability | 6 | 0 |
+| B. Retrieval relevance | 17 | 0 |
+| C. Answer grounding (LLM) | 17 | 0 |
+| D. Unknown-question handling (LLM) | 7 | 0 |
+| E. Prompt-injection resistance (LLM) | 3 | 0 |
+| **Total** | **50** | **0** |
+Retrieval MRR 0.971; index 65 chunks (handbook.pdf 40, faqs.md 25), `BAAI/bge-small-en-v1.5`, FAISS `IndexFlatIP`,
+top-k 4, threshold 0.65 (borderline band 0.60-0.65 with keyword corroboration).
+
+### Held-out hybrid evaluation, GPT-4.1 on the production images (`azure_eval_report.md`)
+62 held-out questions (`tests/eval/heldout_questions.json`), HTTPS through App Service-like proxies, PostgreSQL 16 with
+TLS verify-full. Routing 62/62; third-party detection recall 100%, false positives 0; records answers 26/26;
+unauthorized refused 8/8; other-employee data in answers 0; retrieval hit@k 30/30, MRR 0.978; grounded handbook answers
+30/30; false fallbacks 0/30; citation hit 30/30, precision 1.00; mixed answers 10/10; out-of-scope fallback 6/6;
+errors after retries 0. Routing by category: ambiguous 6/6, handbook 16/16, mixed 10/10, out_of_scope 6/6,
+records 16/16, unauthorized 8/8.
+Latency (ms, nearest-rank): records n=24 p50 55 / p95 107; handbook n=28 p50 1706 / p95 3040 / max 3385; mixed n=10
+p50 1546 / p95 2189; all n=62 p50 1250 / p95 2582.
+
+### Held-out hybrid evaluation, M4 with the earlier temporary Groq LLM (`hybrid_eval_report.md`, historical)
+Same 62 questions: routing 62/62, records 26/26, unauthorized 8/8, retrieval 30/30 (MRR 0.978), grounded 30/30,
+citation hit 30/30 (precision 1.00), mixed 10/10, out-of-scope 6/6, errors 0. Latency (ms): records p50 160 / p95 188;
+handbook p50 425 / p95 3496; mixed p50 443 / p95 2452; all p50 340 / p95 2452.
+
+### Final local release test (`final_local_test_report.md`, historical, Groq era)
+Verdict: local release (React + FastAPI + PostgreSQL + FAISS, Docker Compose) passed all functional, failure-handling,
+persistence and evaluation checks. Backend tests 80 passed (at that time); frontend tests 4 passed; production build
+OK; RAG evaluation 50/50 (MRR 0.971); Docker build/startup healthy in dependency order; API through nginx 18/18;
+browser end-to-end 16/16; workflow sweep 15/15; invalid inputs 20/20; database outage 5/5 + recovery 1/1; LLM outage
+-> friendly 503; retrieval failure -> generic 500; restart/crash/down-up 4/4 each; secret and log scan clean;
+`npm audit` 0 vulnerabilities. Frontend lint had 7 pre-existing errors then (later fixed: lint clean in every CI run).
+
+### Submission evidence (`submission_evidence.md`) - key verified results
+* Success criteria: in-scope answers with a source 100% (target >= 80%); out-of-scope fallback 100% (target 100%);
+  production grounded answer 4232 ms (target < 5 s).
+* Production verification `70-Verify-Deployment.ps1`: 17/17 on the first Azure release (8 public + 9 signed-in);
+  CD #4 release: 8/8 public in the pipeline and independently; 9 signed-in checks run by the owner.
+* Azure: frontend the only public endpoint; backend public access disabled behind a private endpoint; PostgreSQL 16
+  VNet-injected, no public access, TLS required and verified; ACR admin disabled, managed-identity pulls; SCM/FTP basic
+  auth disabled; database administrator password rotated after migration.
+* In-VNet migration: TLS 1.3 verify-full, 12/12 table fingerprints identical, migrations 008/005 applied, temporary
+  access removed afterwards.
+* CD #4: tag `b81eff938637-45595741589-1`, backend `sha256:8056c5e66dfb920b9a4b8f3429c1a49dd5f68d303c9ddf032603c82ca80ccc37`,
+  frontend `sha256:9778bade6b775cecc9f23ac3742dd6def5dc3f1e8e039a93b77b1075dd036b42`; Trivy 0 HIGH/CRITICAL and 0 secrets.
+* Load test (local, records only, historical): 287 requests, 0 failures, median 83 ms / p95 200 ms (kept in
+  `docs/load_test_report.md`).
+
+### Also removed
+`demo_script.md` (earlier local walkthrough) and `architecture.png` (superseded Day 31 design; `architecture-final.png`
+and the Mermaid views in `docs/architecture.md` remain).
+
+### Documentation cleanup and README restructuring
+
+* **Removed from `docs/`** (archived byte-identical in `..\submission\archived-docs\`; results preserved above):
+  `demo_script.md`, `architecture.png`, `azure_eval_report.md`, `final_local_test_report.md`, `hybrid_eval_report.md`,
+  `rag_eval_report.md`, `submission_evidence.md`. The requested `localtestreport.md` has no exact match; the nearest
+  file, `docs/test_report.md`, was kept pending the owner's decision. `docs/architecture-final.png` unchanged.
+* **References corrected:** `docs/architecture.md` (historical-design section for the removed PNG removed),
+  `docs/load_test_report.md`, `docs/test_report.md`, `docs/runbook.md` (links now point to `project_plan.md` or the
+  scripts). `scripts/rag_eval.py` / `scripts/hybrid_eval.py` still write their reports on demand (output paths, not
+  links); no test, Docker, CI/CD or Azure deployment file depended on the removed documents.
+* **README.md rewritten** in a bullet-oriented structure: Results at a glance, Project status, Features, Scope (incl.
+  the problem statement's out-of-scope list), Architecture (approved diagram + request flow), Technology stack,
+  Repository layout, Configuration, Local development, Docker Compose, Operations runbook (start/stop, accounts,
+  health, logs, common problems, data/index, backups, safety rules), RAG workflow and guardrails, Security, API
+  endpoints, Testing, Azure deployment, CI/CD (production CD manually triggered with required approval; no automatic
+  Azure deployments), Known limitations, Documentation, Author. LLM provider stated without the bracketed detail; all
+  dates, timestamps and dated progress descriptions removed; Author section contains only the name.
+* **Validation:** 39 relative README links/anchors resolve; 0 date tokens; 0 credentials/identifiers; 0 references to
+  removed files; backend suite 718 passed (133 PostgreSQL tests skipped locally); evaluation/CD/Docker/deployment tests
+  81 passed. No application logic, infrastructure or architecture image changed; nothing committed or deployed.
+
+### Final architecture diagram
+
+* The owner added the final `docs/architecture.png` (1671 x 941) and an updated `docs/architecture.md`, which displays
+  it (`![OnboardAI architecture](architecture.png)`). The new PNG was not modified.
+* `README.md` now references `docs/architecture.png` (alt text describes the diagram); the redundant
+  `docs/architecture-final.png` was removed after confirming the new PNG is present. No other file referenced it
+  (earlier mentions in this plan are historical).
+* The new diagram reflects the implementation for ingestion (pypdf), chunking (section-aware 2-sentence windows),
+  embeddings (FastEmbed), FAISS and CD (manual trigger + approval, rollback). Two labels still differ from the
+  deployed infrastructure (noted, image unchanged): PostgreSQL is VNet-injected (the private endpoint belongs to the
+  backend Web App), and the frontend Web App is public (VNet integration is outbound only).
+* Validation: 10 Markdown documents, 53 relative links/images, 0 broken; README and architecture.md both resolve the
+  new image. No application code, deployment or Git operation.
