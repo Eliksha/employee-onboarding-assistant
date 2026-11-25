@@ -2230,3 +2230,45 @@ missing variables.
 
 **Owner follow-up:** delete the unused environment named `environment` (Settings -> Environments) so its copies of the
 identifiers are not left behind; then re-run CD on `main` after committing this fix.
+
+---
+
+## CD Runs #2 and #3 - Root Cause and Comprehensive Fix (25 Nov 2026)
+
+**Runs #2 and #3** (commit `79a1a20`, `main`): gate, build, index validation, smoke checks and both Trivy scans
+**passed on GitHub**; the release job failed at step 6 "Azure sign-in (OIDC)" in both runs with
+`AADSTS700213: No matching federated identity record found for presented assertion subject
+'repo:Eliksha@157783130/employee-onboarding-assistant@1462706090:environment:production'`. All later steps (push,
+deploy, rollback) were skipped.
+
+**Root cause:** GitHub issues this repository's OIDC subject in the immutable-ID format (`owner@owner-id/repo@repo-id`);
+the federated credential expected the classic `repo:Eliksha/employee-onboarding-assistant:environment:production`.
+Owner id 157783130 and repository id 1462706090 confirmed via the GitHub API.
+
+**Production (verified 25 Nov 2026, after the runs):** both apps on `78b80ee-202611241823`, sitecontainer
+configuration last modified 04:47/04:48 UTC (before any CD run), backend public access Disabled, `/api/health`
+HTTP 200 `{"status":"ok","database":"ok"}`; registry contains only the earlier tags - **no CD run pushed or changed
+anything**.
+
+**Fixes:**
+| # | Fix | Where |
+|---|---|---|
+| 1 | Federated credential `github-production` subject updated to the presented claim `repo:Eliksha@157783130/employee-onboarding-assistant@1462706090:environment:production` (same repository + environment restriction, pinned to immutable ids; issuer/audience unchanged; identity still has only its 3 resource-scoped roles) | Azure (CD identity, within the approved OIDC scope) |
+| 2 | Helper no longer needs `jq`: JSON handled by Python 3 (preinstalled on runners), so every read-only subcommand was executed against the real resources | `deploy/azure/cd-release.sh` |
+| 3 | Token masking emitted only inside GitHub Actions (`GITHUB_ACTIONS=true`); a local test printed the operator's short-lived ARM access token and ACR refresh token to the local session (expire within ~1 h / ~3 h; not the CD identity) | `deploy/azure/cd-release.sh` |
+| 4 | New fail-safe step after OIDC sign-in, before any push/deploy: Azure CLI version, `sitecontainers` commands available, subscription selectable by the resource-scoped identity, both Web Apps readable | `.github/workflows/cd.yml` |
+
+**Validation against the real environment (read-only, operator account):** `image` and `host` for both apps;
+`snapshot` of both apps (sitecontainer fields, public access, HTTPS, basic auth scm/ftp, TLS, restrictions) and
+`compare` -> unchanged; tampered snapshot -> drift reported with exact fields, exit 1; `wait-healthy` on production ->
+3/3 healthy, exit 0; unreachable host -> exit 1; health JSON rule (ok / database unavailable / non-JSON / list /
+empty -> 0/1/1/1/1); ACR Entra token exchange + docker login -> ok, no token printed; `docker manifest inspect`
+existing tag -> exists (immutable-tag guard), new tag -> absent; digest extraction -> `sha256:...` (71 chars);
+helper under Linux bash + python3 (compare same/drift, usage) -> correct. actionlint and shellcheck: 0 findings.
+Tests: `test_cd_workflow.py` + deployment-readiness + Docker-config suites **54 passed** (CD file 16: +2 for the
+jq-free helper/guarded masking and the post-login context check).
+
+**Not testable before an approved release:** OIDC token exchange as the managed identity, subscription visibility
+for the resource-scoped identity (now checked fail-safe before any change), AcrPush push as the identity,
+`az webapp sitecontainers update` under Website Contributor, the real restart/health timing and an actual rollback.
+CD remains **not operational** until a release succeeds.

@@ -103,9 +103,27 @@ def test_tags_include_run_attempt(wf):
     assert attempt_tag in build and attempt_tag in release   # the registry tag is computed in the release attempt
 
 
+def test_helper_needs_no_jq_and_masks_only_in_github_actions():
+    code = _code(HELPER)
+    assert "jq " not in code and "| jq" not in code          # Python 3 parses JSON (testable against real resources)
+    assert 'mask() { if [ "${GITHUB_ACTIONS:-}" = true ]' in code
+    assert 'echo "::add-mask::$aad"' not in code and 'echo "::add-mask::$refresh"' not in code
+
+
+def test_azure_context_checked_after_login_before_any_change(wf):
+    steps = wf["jobs"]["release"]["steps"]
+    login = next(i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("azure/login"))
+    check = next(i for i, s in enumerate(steps) if s.get("name", "").startswith("Azure context check"))
+    push = next(i for i, s in enumerate(steps) if s.get("id") == "push")
+    assert login < check < push
+    run = steps[check]["run"]
+    assert "sitecontainers update --help" in run and "az account show" in run and "az webapp show" in run
+
+
 def test_health_requires_http_200_and_healthy_json():
     text = HELPER.read_text(encoding="utf-8")
-    assert '[ "$code" = 200 ]' in text and '.status == "ok" and .database == "ok"' in text
+    assert '[ "$code" = 200 ]' in text and "healthy_json" in text
+    assert 'd.get("status") == "ok" and d.get("database") == "ok"' in text
 
 
 def test_rollback_on_failure_and_public_verification(wf):
