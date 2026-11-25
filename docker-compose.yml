@@ -1,0 +1,84 @@
+# Local Docker stack for OnboardAI (synthetic data). Not an Azure deployment.
+#
+#   $env:DOCKER_PG_PASSWORD = "<any local value>"     # password for the container-only database
+#   docker compose up -d --build
+#   open http://localhost:8080
+#
+# Secrets come from the environment / the git-ignored .env file; nothing is baked into images.
+# The container database is separate from any local PostgreSQL and is seeded from docker/postgres/
+# (schema, synthetic data, authentication tables). No login accounts are created automatically:
+#   docker compose exec backend python -m backend.manage_accounts set --email <email> --employee-id EMP001
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: onboardai
+      POSTGRES_USER: onboardai
+      POSTGRES_PASSWORD: ${DOCKER_PG_PASSWORD:?Set DOCKER_PG_PASSWORD for the container database}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U onboardai -d onboardai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    # No published port: only reachable from the Docker network.
+
+  backend:
+    build: .
+    env_file:
+      - path: .env          # optional local RAG settings; Azure OpenAI values come from the secrets file
+        required: false
+    environment:
+      # Container database always overrides any local PG_* values from .env.
+      DB_BACKEND: postgresql
+      PG_HOST: db
+      PG_PORT: "5432"
+      PG_DATABASE: onboardai
+      # Least-privilege roles (backend/migrations/005_least_privilege_roles.py). Until they are provisioned
+      # and DOCKER_PG_APP_* / DOCKER_PG_READER_* are set, PG_USER falls back to the owner account, which the
+      # backend refuses at startup (fail closed; see ALLOW_PRIVILEGED_DB_CONNECTION below).
+      PG_USER: ${DOCKER_PG_APP_USER:-onboardai}
+      PG_PASSWORD: ${DOCKER_PG_APP_PASSWORD:-${DOCKER_PG_PASSWORD:?Set DOCKER_PG_PASSWORD for the container database}}
+      PG_READER_USER: ${DOCKER_PG_READER_USER:-}
+      PG_READER_PASSWORD: ${DOCKER_PG_READER_PASSWORD:-}
+      PG_SCOPE_SECRET: ${DOCKER_PG_SCOPE_SECRET:-}      # same value stored by migration 005
+      HF_HUB_OFFLINE: "1"   # embedding model is baked into the image
+      # Azure OpenAI (GPT-4.1 deployment, v1 Responses API). Values come from the external secrets file
+      # (docker compose --env-file <secrets file> ...); never baked into the image or written to the repository.
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      # The backend sits behind nginx: use its X-Forwarded-For / -Proto for login rate limiting and
+      # Secure cookies. SESSION_COOKIE_SECURE=auto sets Secure automatically once HTTPS terminates in front.
+      TRUST_PROXY_HEADERS: "true"
+      # API documentation (/docs, /redoc, /openapi.json) is not served by the containerised backend.
+      API_DOCS: "false"
+      # Fail closed: the backend refuses to start as a superuser/BYPASSRLS role (for example the owner fallback
+      # above when the secrets file is not passed). Pinned here so .env cannot re-enable it in Docker.
+      ALLOW_PRIVILEGED_DB_CONNECTION: "false"
+    volumes:
+      - ./data/index:/app/data/index:ro   # existing FAISS index, never modified by the container
+      - logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  logs:

@@ -1,0 +1,813 @@
+{
+  "version": 1,
+  "description": "Schema dictionary for the OnboardAI PostgreSQL database (schema public), with migration 005 row-level security and migration 007 integrity constraints applied. Validated against the live catalog by tests/integration/test_postgres_m4.py and `python -m scripts.schema_dictionary --check`. The security schemas onboardai_private and onboardai_rls are intentionally not described.",
+  "tables": {
+    "assets": {
+      "description": "IT assets assigned to employees.",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": true,
+      "reader_access": true,
+      "import_file": "assets.csv",
+      "columns": {
+        "asset_id": {
+          "type": "text",
+          "nullable": false,
+          "description": "Asset identifier, e.g. AST001."
+        },
+        "employee_id": {
+          "type": "text",
+          "nullable": false,
+          "description": "Assigned employee."
+        },
+        "asset_type": {
+          "type": "text",
+          "nullable": false,
+          "description": "Asset category, e.g. Laptop."
+        },
+        "asset_name": {
+          "type": "text",
+          "nullable": false,
+          "description": "Model name."
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "description": "assigned / returned / in_repair / lost."
+        }
+      },
+      "primary_key": [
+        "asset_id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "employee_id"
+          ],
+          "references": {
+            "table": "employees",
+            "columns": [
+              "employee_id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        }
+      ]
+    },
+    "checklist": {
+      "description": "Onboarding task catalogue (Day 1 / Week 1 / Month 1).",
+      "personal_data": false,
+      "sensitive": false,
+      "row_level_security": false,
+      "reader_access": true,
+      "import_file": "checklist.csv",
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Task identifier."
+        },
+        "phase": {
+          "type": "text",
+          "nullable": true,
+          "description": "Day 1, Week 1 or Month 1."
+        },
+        "task": {
+          "type": "text",
+          "nullable": true,
+          "description": "Task description."
+        },
+        "done": {
+          "type": "integer",
+          "nullable": true,
+          "description": "Legacy global completion flag (admin-only legacy route; per-employee progress is in checklist_assignments)."
+        }
+      },
+      "primary_key": [
+        "id"
+      ],
+      "unique": [],
+      "foreign_keys": []
+    },
+    "checklist_assignments": {
+      "description": "Per-employee onboarding progress.",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": true,
+      "reader_access": true,
+      "import_file": "checklist_assignments.csv",
+      "columns": {
+        "employee_id": {
+          "type": "text",
+          "nullable": false,
+          "description": "Employee."
+        },
+        "checklist_id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Task from checklist."
+        },
+        "done": {
+          "type": "integer",
+          "nullable": false,
+          "description": "1 when the employee completed the task, else 0."
+        }
+      },
+      "primary_key": [
+        "employee_id",
+        "checklist_id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "checklist_id"
+          ],
+          "references": {
+            "table": "checklist",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        },
+        {
+          "columns": [
+            "employee_id"
+          ],
+          "references": {
+            "table": "employees",
+            "columns": [
+              "employee_id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        }
+      ]
+    },
+    "employees": {
+      "description": "Synthetic employee profiles (HR master data).",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": true,
+      "reader_access": true,
+      "import_file": "employees.csv",
+      "columns": {
+        "employee_id": {
+          "type": "text",
+          "nullable": false,
+          "description": "Employee identifier, e.g. EMP001."
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "description": "Full name."
+        },
+        "email": {
+          "type": "text",
+          "nullable": false,
+          "description": "Work email (unique)."
+        },
+        "department": {
+          "type": "text",
+          "nullable": false,
+          "description": "Department name."
+        },
+        "joining_date": {
+          "type": "text",
+          "nullable": false,
+          "description": "Joining date, ISO YYYY-MM-DD (stored as text)."
+        },
+        "location": {
+          "type": "text",
+          "nullable": false,
+          "description": "Office city."
+        }
+      },
+      "primary_key": [
+        "employee_id"
+      ],
+      "unique": [
+        [
+          "email"
+        ]
+      ],
+      "foreign_keys": []
+    },
+    "escalation_events": {
+      "description": "Audit trail of the HR/IT escalation queue: creation, every view by HR/IT staff and every status change.",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": false,
+      "reader_access": false,
+      "import_file": null,
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Event identifier (identity)."
+        },
+        "escalation_id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Escalation (deleted with it)."
+        },
+        "actor_user_id": {
+          "type": "integer",
+          "nullable": true,
+          "description": "Account that acted (NULL if unknown)."
+        },
+        "action": {
+          "type": "text",
+          "nullable": false,
+          "description": "created / viewed / status_changed."
+        },
+        "from_status": {
+          "type": "text",
+          "nullable": true,
+          "description": "Status before a change."
+        },
+        "to_status": {
+          "type": "text",
+          "nullable": true,
+          "description": "Status after a change."
+        },
+        "note": {
+          "type": "text",
+          "nullable": true,
+          "description": "Optional HR/IT note (at most 1000 characters)."
+        },
+        "created_at": {
+          "type": "text",
+          "nullable": false,
+          "description": "ISO timestamp (text)."
+        }
+      },
+      "primary_key": [
+        "id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "escalation_id"
+          ],
+          "references": {
+            "table": "escalations",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "CASCADE"
+        },
+        {
+          "columns": [
+            "actor_user_id"
+          ],
+          "references": {
+            "table": "user_accounts",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        }
+      ]
+    },
+    "escalations": {
+      "description": "HR/IT escalations (in-app HR/IT support queue, migration 008), attributed to the escalating employee and optionally to a chat answer.",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": false,
+      "reader_access": false,
+      "import_file": null,
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Escalation identifier (identity)."
+        },
+        "question": {
+          "type": "text",
+          "nullable": true,
+          "description": "Escalated question."
+        },
+        "contact_pref": {
+          "type": "text",
+          "nullable": true,
+          "description": "Preferred contact."
+        },
+        "status": {
+          "type": "text",
+          "nullable": true,
+          "description": "open / in_progress / resolved / closed."
+        },
+        "created_at": {
+          "type": "text",
+          "nullable": true,
+          "description": "ISO timestamp (text)."
+        },
+        "employee_id": {
+          "type": "text",
+          "nullable": true,
+          "description": "Escalating employee (NULL for accounts without an employee workspace)."
+        },
+        "message_id": {
+          "type": "integer",
+          "nullable": true,
+          "description": "Escalated chat answer (NULL for free-text escalations; set NULL if the message is deleted)."
+        },
+        "updated_at": {
+          "type": "text",
+          "nullable": true,
+          "description": "ISO timestamp of the last status change (text)."
+        },
+        "resolution_note": {
+          "type": "text",
+          "nullable": true,
+          "description": "Latest note from HR/IT support."
+        },
+        "handled_by": {
+          "type": "integer",
+          "nullable": true,
+          "description": "HR/IT account that last changed the status."
+        }
+      },
+      "primary_key": [
+        "id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "employee_id"
+          ],
+          "references": {
+            "table": "employees",
+            "columns": [
+              "employee_id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        },
+        {
+          "columns": [
+            "message_id"
+          ],
+          "references": {
+            "table": "messages",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "SET NULL"
+        },
+        {
+          "columns": [
+            "handled_by"
+          ],
+          "references": {
+            "table": "user_accounts",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        }
+      ]
+    },
+    "feedback": {
+      "description": "Thumbs up/down feedback on chat messages.",
+      "personal_data": false,
+      "sensitive": false,
+      "row_level_security": false,
+      "reader_access": false,
+      "import_file": null,
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Feedback identifier (identity)."
+        },
+        "message_id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Rated message (required; feedback is deleted with its message)."
+        },
+        "rating": {
+          "type": "text",
+          "nullable": true,
+          "description": "up or down."
+        },
+        "comment": {
+          "type": "text",
+          "nullable": true,
+          "description": "Optional user comment."
+        },
+        "created_at": {
+          "type": "text",
+          "nullable": true,
+          "description": "ISO timestamp (text)."
+        }
+      },
+      "primary_key": [
+        "id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "message_id"
+          ],
+          "references": {
+            "table": "messages",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "CASCADE"
+        }
+      ]
+    },
+    "leave_balances": {
+      "description": "Available leave days per employee and leave type.",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": true,
+      "reader_access": true,
+      "import_file": "leave_balances.csv",
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Surrogate key (identity)."
+        },
+        "employee_id": {
+          "type": "text",
+          "nullable": false,
+          "description": "Owner employee."
+        },
+        "leave_type": {
+          "type": "text",
+          "nullable": false,
+          "description": "Leave type, e.g. Casual Leave."
+        },
+        "available_days": {
+          "type": "double precision",
+          "nullable": false,
+          "description": "Days still available (>= 0)."
+        }
+      },
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "employee_id",
+          "leave_type"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "employee_id"
+          ],
+          "references": {
+            "table": "employees",
+            "columns": [
+              "employee_id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        }
+      ]
+    },
+    "login_failures": {
+      "description": "Failed sign-in attempts for the shared login rate limit (all workers and instances); keys are SHA-256 hashes, rows older than the window are deleted.",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": false,
+      "reader_access": false,
+      "import_file": null,
+      "columns": {
+        "key_hash": {
+          "type": "text",
+          "nullable": false,
+          "description": "SHA-256 of 'email:<address>' or 'ip:<address>' (never stored in clear)."
+        },
+        "failed_at": {
+          "type": "double precision",
+          "nullable": false,
+          "description": "Unix time of the failure."
+        }
+      },
+      "primary_key": [],
+      "unique": [],
+      "foreign_keys": []
+    },
+    "messages": {
+      "description": "Chat history; one row per chat exchange.",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": false,
+      "reader_access": false,
+      "import_file": null,
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Message identifier (identity)."
+        },
+        "question": {
+          "type": "text",
+          "nullable": true,
+          "description": "User question."
+        },
+        "answer": {
+          "type": "text",
+          "nullable": true,
+          "description": "Assistant answer."
+        },
+        "found": {
+          "type": "integer",
+          "nullable": true,
+          "description": "1 when the answer was found in records or the handbook, else 0."
+        },
+        "sources": {
+          "type": "text",
+          "nullable": true,
+          "description": "JSON list of cited sources."
+        },
+        "created_at": {
+          "type": "text",
+          "nullable": true,
+          "description": "ISO timestamp (text)."
+        },
+        "employee_id": {
+          "type": "text",
+          "nullable": true,
+          "description": "Owner employee (NULL for legacy/admin messages)."
+        }
+      },
+      "primary_key": [
+        "id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "employee_id"
+          ],
+          "references": {
+            "table": "employees",
+            "columns": [
+              "employee_id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        }
+      ]
+    },
+    "payroll_calendar": {
+      "description": "Company-wide payroll payment dates (no per-employee pay data).",
+      "personal_data": false,
+      "sensitive": false,
+      "row_level_security": false,
+      "reader_access": true,
+      "import_file": "payroll_calendar.csv",
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Surrogate key (identity)."
+        },
+        "payroll_month": {
+          "type": "text",
+          "nullable": false,
+          "description": "Payroll month YYYY-MM (unique)."
+        },
+        "payment_date": {
+          "type": "text",
+          "nullable": false,
+          "description": "Payment date YYYY-MM-DD (stored as text)."
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "description": "scheduled / processed / paid / cancelled."
+        }
+      },
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "payroll_month"
+        ]
+      ],
+      "foreign_keys": []
+    },
+    "tickets": {
+      "description": "Employee support tickets (HR/IT requests).",
+      "personal_data": true,
+      "sensitive": false,
+      "row_level_security": true,
+      "reader_access": true,
+      "import_file": null,
+      "columns": {
+        "ticket_id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Ticket identifier (identity)."
+        },
+        "employee_id": {
+          "type": "text",
+          "nullable": false,
+          "description": "Requesting employee."
+        },
+        "category": {
+          "type": "text",
+          "nullable": false,
+          "description": "HR or IT category."
+        },
+        "subject": {
+          "type": "text",
+          "nullable": false,
+          "description": "User-written subject (untrusted text)."
+        },
+        "description": {
+          "type": "text",
+          "nullable": false,
+          "description": "User-written description (untrusted text)."
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "description": "open / in_progress / resolved / closed."
+        },
+        "created_at": {
+          "type": "text",
+          "nullable": false,
+          "description": "Creation time 'YYYY-MM-DD HH24:MI:SS' (text)."
+        },
+        "updated_at": {
+          "type": "text",
+          "nullable": false,
+          "description": "Last update time (text)."
+        }
+      },
+      "primary_key": [
+        "ticket_id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "employee_id"
+          ],
+          "references": {
+            "table": "employees",
+            "columns": [
+              "employee_id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        }
+      ]
+    },
+    "user_accounts": {
+      "description": "Login accounts (authentication).",
+      "personal_data": true,
+      "sensitive": true,
+      "row_level_security": false,
+      "reader_access": false,
+      "import_file": null,
+      "columns": {
+        "id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Account identifier (identity)."
+        },
+        "email": {
+          "type": "text",
+          "nullable": false,
+          "description": "Login email (unique)."
+        },
+        "password_hash": {
+          "type": "text",
+          "nullable": false,
+          "description": "Argon2id hash (secret; never exposed)."
+        },
+        "employee_id": {
+          "type": "text",
+          "nullable": true,
+          "description": "Linked employee (unique; NULL for admin accounts)."
+        },
+        "role": {
+          "type": "text",
+          "nullable": false,
+          "description": "employee or admin."
+        },
+        "is_active": {
+          "type": "integer",
+          "nullable": false,
+          "description": "1 active, 0 disabled."
+        },
+        "created_at": {
+          "type": "bigint",
+          "nullable": false,
+          "description": "Unix time."
+        },
+        "updated_at": {
+          "type": "bigint",
+          "nullable": false,
+          "description": "Unix time."
+        }
+      },
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "email"
+        ],
+        [
+          "employee_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "employee_id"
+          ],
+          "references": {
+            "table": "employees",
+            "columns": [
+              "employee_id"
+            ]
+          },
+          "on_delete": "NO ACTION"
+        }
+      ]
+    },
+    "user_sessions": {
+      "description": "Server-side sessions (authentication).",
+      "personal_data": true,
+      "sensitive": true,
+      "row_level_security": false,
+      "reader_access": false,
+      "import_file": null,
+      "columns": {
+        "token_hash": {
+          "type": "text",
+          "nullable": false,
+          "description": "SHA-256 of the session token (the token itself is never stored)."
+        },
+        "user_id": {
+          "type": "integer",
+          "nullable": false,
+          "description": "Account."
+        },
+        "csrf_token": {
+          "type": "text",
+          "nullable": false,
+          "description": "Per-session CSRF token (secret)."
+        },
+        "created_at": {
+          "type": "bigint",
+          "nullable": false,
+          "description": "Unix time."
+        },
+        "last_seen_at": {
+          "type": "bigint",
+          "nullable": false,
+          "description": "Unix time (idle timeout)."
+        },
+        "expires_at": {
+          "type": "bigint",
+          "nullable": false,
+          "description": "Unix time (absolute expiry)."
+        }
+      },
+      "primary_key": [
+        "token_hash"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "user_id"
+          ],
+          "references": {
+            "table": "user_accounts",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "CASCADE"
+        }
+      ]
+    }
+  }
+}

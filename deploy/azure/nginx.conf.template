@@ -1,0 +1,64 @@
+# OnboardAI frontend on Azure App Service. App Service terminates TLS (HTTPS only) and forwards to port 80.
+# ${...} placeholders are filled from application settings at container start (frontend-entrypoint.sh, envsubst);
+# The entrypoint passes an explicit variable list to envsubst, so nginx variables such as $host are untouched.
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    server_tokens off;
+    client_max_body_size 64k;
+
+    # Same headers as the local stack, plus HSTS (the site is served over HTTPS only).
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+
+    # Platform health check for this container (static; the backend has its own /ready check).
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok";
+    }
+
+    # API documentation is never exposed through the public entry point.
+    location ~ ^/api/(docs|redoc|openapi\.json)$ {
+        return 404;
+    }
+    # Readiness details stay internal (platform probes call the backend directly).
+    location = /api/ready {
+        return 404;
+    }
+
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=30s ipv6=off;
+    set $backend_upstream ${BACKEND_ORIGIN};
+
+    location /api/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass $backend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        # App Service routes by Host and SNI; the backend certificate is verified against the system CA bundle.
+        proxy_set_header Host ${BACKEND_HOST};
+        proxy_ssl_server_name on;
+        proxy_ssl_name ${BACKEND_HOST};
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 3;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        proxy_ssl_protocols TLSv1.2 TLSv1.3;
+        # Shared secret: the backend rejects API requests without it (direct access to the backend is useless).
+        proxy_set_header X-OnboardAI-Proxy-Key ${BACKEND_PROXY_SECRET};
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 60s;
+        proxy_hide_header X-Powered-By;
+    }
+
+    location / {
+        try_files $uri /index.html;
+    }
+}

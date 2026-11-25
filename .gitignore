@@ -8,3 +8,11 @@ __pycache__/
 *.db
 data/index/*
 !data/index/.gitkeep
+logs/
+# Local load-test / evaluation output (results are summarised in docs/)
+loadtest-output/
+# Database backups and dumps (may hold password hashes and the employee-scope signing key) - never commit
+backups/
+*.dump
+# Azure deployment settings with real subscription/resource names (deploy/azure/config.example.psd1 is the template)
+deploy/azure/config.psd1

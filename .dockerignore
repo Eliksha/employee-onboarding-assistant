@@ -1,0 +1,22 @@
+# Never send secrets, local databases, the local index or dev artefacts to the build context.
+.git
+.github
+.env
+.env.*
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+logs
+data/*.db
+data/index
+frontend
+tests
+docs
+scripts
+docker
+*.zip
+# Database backups (never part of a build context)
+backups
+*.dump

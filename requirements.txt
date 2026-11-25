@@ -1,13 +1,18 @@
-fastapi
-uvicorn[standard]
-pydantic-settings
-python-dotenv
-openai
-faiss-cpu
-numpy
-pypdf
-streamlit
-requests
-pytest
-httpx
-locust
+# Runtime dependencies of the OnboardAI backend (installed in the Docker image).
+# Versions are pinned to the set running in the verified Docker image (Python 3.12, 23 Nov 2026).
+# Development and test tools live in requirements-dev.txt. Upgrade deliberately: change a pin,
+# run the full test suite (CI) and rebuild the image.
+fastapi==0.165.0
+starlette==1.10.0
+pydantic==2.14.4
+pydantic-settings==2.16.3
+python-dotenv==1.2.4
+uvicorn[standard]==0.54.0
+openai==3.57.0
+faiss-cpu==1.16.0
+fastembed==0.9.1
+numpy==2.5.5
+pypdf==7.1.1
+psycopg2-binary==2.9.13
+argon2-cffi==25.1.0
+pglast==7.24

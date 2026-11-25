@@ -1,0 +1,3 @@
+# Build context for deploy/azure/migration/migration.Dockerfile (repository root): only the migration files.
+*
+!deploy/azure/migration/

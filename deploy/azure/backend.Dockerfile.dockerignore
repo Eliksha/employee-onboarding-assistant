@@ -1,0 +1,14 @@
+# Build context for deploy/azure/backend.Dockerfile (repository root). Allow-list: only what the image needs.
+# Secrets (.env, secrets files), backups/dumps, local databases, logs, tests and docs never enter the context.
+*
+!requirements.txt
+!backend/
+!data/raw/
+!data/index/ACTIVE
+!data/index/versions/
+**/__pycache__
+**/*.pyc
+**/*.db
+**/*.dump
+**/.env
+**/.env.*
