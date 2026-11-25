@@ -57,6 +57,17 @@ jobs:
           n=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=main&event=push&status=success" --jq '.total_count')
           echo "successful CI runs for $GITHUB_SHA on main: $n"
           [ "$n" -ge 1 ] || { echo "::error::No successful CI run (push to main) for $GITHUB_SHA. Wait for CI to pass, then re-run."; exit 1; }
+      - name: Protected 'production' environment exists (required reviewer + branch policy)
+        # A job that references a missing environment makes GitHub create it WITHOUT protection rules or variables
+        # (first CD run, 25 Nov 2026). Refuse to start the release job unless the protected environment already exists.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rules=$(gh api "repos/$GITHUB_REPOSITORY/environments/production" --jq '[.protection_rules[].type] | join(",")' 2>/dev/null || true)
+          echo "production environment protection rules: ${rules:-none (environment missing)}"
+          case ",$rules," in *,required_reviewers,*) ;; *) echo "::error::Environment 'production' is missing or has no required reviewer."; exit 1 ;; esac
+          case ",$rules," in *,branch_policy,*) ;; *) echo "::error::Environment 'production' has no deployment branch policy (main only)."; exit 1 ;; esac
 
   build:
     name: Build, validate and scan production images (no Azure access)
@@ -157,18 +168,36 @@ jobs:
       contents: read
       id-token: write          # GitHub OIDC token for the Azure federated credential; nothing else
     env:
-      AZ_RG: ${{ vars.AZURE_RESOURCE_GROUP }}
-      AZ_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      ACR: ${{ vars.AZURE_ACR_LOGIN_SERVER }}
-      BACKEND_APP: ${{ vars.BACKEND_APP }}
-      FRONTEND_APP: ${{ vars.FRONTEND_APP }}
       TAG: ${{ needs.build.outputs.tag }}          # local name of the scanned images (from the build job)
       HELPER: deploy/azure/cd-release.sh
     steps:
-      - name: Check configuration and hide environment identifiers in logs
+      # The seven `production` environment variables are resolved HERE (step level), all validated before any
+      # checkout, Azure sign-in or deployment, masked, and passed to later steps through GITHUB_ENV.
+      - name: Validate the seven production environment variables (before Azure sign-in)
+        env:
+          V_AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          V_AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          V_AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          V_AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          V_AZURE_ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_LOGIN_SERVER }}
+          V_BACKEND_APP: ${{ vars.BACKEND_APP }}
+          V_FRONTEND_APP: ${{ vars.FRONTEND_APP }}
         run: |
-          for v in AZ_RG AZ_SUB ACR BACKEND_APP FRONTEND_APP; do [ -n "${!v}" ] || { echo "::error::Environment variable for $v is not set (see deploy/azure/README.md, CD)"; exit 1; }; done
-          echo "::add-mask::$AZ_SUB"; echo "::add-mask::$AZ_RG"; echo "::add-mask::$ACR"
+          set -euo pipefail
+          missing=()
+          for n in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_ACR_LOGIN_SERVER BACKEND_APP FRONTEND_APP; do
+            v="V_$n"; [ -n "${!v}" ] || missing+=("$n")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing variables in the GitHub environment 'production': ${missing[*]} (Settings -> Environments -> production -> Environment variables; see deploy/azure/README.md, section 8)"
+            exit 1
+          fi
+          for n in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_ACR_LOGIN_SERVER; do v="V_$n"; echo "::add-mask::${!v}"; done
+          {
+            echo "AZ_SUB=$V_AZURE_SUBSCRIPTION_ID"; echo "AZ_RG=$V_AZURE_RESOURCE_GROUP"; echo "ACR=$V_AZURE_ACR_LOGIN_SERVER"
+            echo "BACKEND_APP=$V_BACKEND_APP"; echo "FRONTEND_APP=$V_FRONTEND_APP"
+          } >> "$GITHUB_ENV"
+          echo "all 7 production environment variables present (identifiers masked)"
       - uses: actions/checkout@v5
         with:
           persist-credentials: false

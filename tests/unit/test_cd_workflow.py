@@ -48,6 +48,31 @@ def test_release_needs_build_and_protected_environment(wf):
     assert release["environment"]["name"] == "production"
 
 
+def test_gate_refuses_missing_or_unprotected_production_environment(wf):
+    # GitHub auto-creates a referenced environment WITHOUT protection (first CD run); the gate must stop that.
+    steps = " ".join(s.get("run", "") for s in wf["jobs"]["gate"]["steps"])
+    assert "environments/production" in steps and "required_reviewers" in steps and "branch_policy" in steps
+
+
+SEVEN_VARS = ("AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_RESOURCE_GROUP",
+              "AZURE_ACR_LOGIN_SERVER", "BACKEND_APP", "FRONTEND_APP")
+
+
+def test_all_seven_variables_resolved_and_validated_before_azure_sign_in(wf):
+    release = wf["jobs"]["release"]
+    assert not any("vars." in str(v) for v in release["env"].values())   # resolved at step level, not job level
+    steps = release["steps"]
+    first = steps[0]
+    assert set(first["env"]) == {f"V_{n}" for n in SEVEN_VARS}
+    for n in SEVEN_VARS:
+        assert first["env"][f"V_{n}"] == "${{ vars.%s }}" % n
+        assert n in first["run"]
+    assert 'missing+=("$n")' in first["run"] and "exit 1" in first["run"] and "$GITHUB_ENV" in first["run"]
+    login = next(i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("azure/login"))
+    deploy = next(i for i, s in enumerate(steps) if s.get("id") == "deploy_backend")
+    assert 0 < login < deploy
+
+
 def test_oidc_login_without_stored_azure_credentials():
     text = CD.read_text(encoding="utf-8")
     assert "azure/login@v2" in text and "client-id: ${{ vars.AZURE_CLIENT_ID }}" in text

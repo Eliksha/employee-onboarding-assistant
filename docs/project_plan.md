@@ -2198,3 +2198,35 @@ extracted contents scanned against every secrets-file value and Azure identifier
 only the public frontend URL appears (intentionally). To be regenerated after the first successful CD release.
 
 **Update (25 Nov 2026):** `docs/presentation_script.md` was removed at the owner's request (not required for submission); its README reference and the row above were removed. `docs/submission_evidence.md` and `docs/architecture-final.png` are unchanged. The draft ZIP still contains the removed file and will be regenerated after the first CD release.
+
+---
+
+## First CD Run (#1) - Failed Safely at the Configuration Check; Fix (25 Nov 2026)
+
+**Run #1** (commit `cd8d430` on `main`): gate passed; build, index validation, smoke checks and both Trivy scans passed;
+the release job failed at its first step ("Environment variable for AZ_RG is not set"). Every later step - checkout,
+OIDC sign-in, push, deployment - was skipped: **production was not changed** and no rollback was needed.
+CD is still **not operational** (no successful release yet).
+
+**Root cause (GitHub API):** the configured environment (reviewer, branch policy, variables) had been created at
+06:52 UTC under the name `environment`; `production` did not exist. When the release job referenced it, GitHub
+created `production` automatically at 08:35:51, 3 s before the job started, **without variables or protection
+rules**, so the variables were empty and the approval gate was not in force for that run. The owner has since
+configured `production` (reviewer + branch policy at 08:40, all seven variables). The job-level variable mapping
+itself was correct.
+
+**Changes (`.github/workflows/cd.yml`, minimal):**
+* Release job: the seven variables are resolved at step level in the FIRST step, all validated together (every
+  missing one is named by its GitHub variable name), the Azure identifiers masked, and the values passed to later
+  steps through `GITHUB_ENV`; `TAG`/`HELPER` stay job-level. Previously only five were checked, one at a time.
+* Gate job: new check that the `production` environment already exists with a required reviewer and a deployment
+  branch policy - otherwise the run stops before the release job could auto-create an unprotected environment.
+* OIDC, approval, scanning, rollback and all other safeguards unchanged.
+
+**Validation:** actionlint 0 findings; `tests/unit/test_cd_workflow.py` **14 passed** (12 + 2 new: variables
+resolved/validated before Azure sign-in, environment protection gate); gate logic against the live repository API:
+`production` (required_reviewers, branch_policy) -> pass, missing environment -> fail; validation logic reports all
+missing variables.
+
+**Owner follow-up:** delete the unused environment named `environment` (Settings -> Environments) so its copies of the
+identifiers are not left behind; then re-run CD on `main` after committing this fix.
