@@ -206,7 +206,7 @@ flowchart LR
 
 ### Delivery pipeline (CI/CD)
 
-CI (`.github/workflows/ci.yml`) runs on every push and pull request. CD (`.github/workflows/cd.yml`) is implemented but **not yet executed**; it is manual and approval-gated:
+CI (`.github/workflows/ci.yml`) runs on every push and pull request. CD (`.github/workflows/cd.yml`) is implemented but **has not completed a release yet** (runs #1-#3 stopped safely before any production change; causes fixed); it is manual and approval-gated:
 
 ```mermaid
 flowchart LR

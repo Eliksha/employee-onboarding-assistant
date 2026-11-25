@@ -165,7 +165,7 @@ login. When administrator access is needed, reset it and keep the new value in t
 
 ## 8. Continuous delivery (GitHub Actions)
 
-**Status: implemented (25 Nov 2026), not yet executed.** CD is operational only after its first successful release
+**Status: implemented (25 Nov 2026); first runs #1-#3 (25 Nov 2026) stopped safely before any production change; both causes - GitHub environment setup and the OIDC subject format - are fixed; no successful release yet.** CD is operational only after its first successful release
 (recorded in `docs/project_plan.md`). Workflow: [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml); helper:
 [`cd-release.sh`](cd-release.sh).
 

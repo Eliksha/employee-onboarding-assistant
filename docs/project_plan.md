@@ -2344,3 +2344,9 @@ UTC still shows only operator events from the operator IP, (3) production health
 registry digests of the new tags must equal the digests in the CD job summary. Any mismatch -> NO-GO / stop and
 investigate. Strictly lowest-risk alternative: start CD after 12:10 UTC (17:40 IST), when the registry token has
 expired as well.
+
+---
+
+## Documentation Status Alignment and Release PR (25 Nov 2026)
+
+CD status wording aligned in README.md, docs/architecture.md, deploy/azure/README.md, docs/runbook.md and docs/submission_evidence.md: CD is implemented; runs #1-#3 stopped safely before any production change (causes fixed: GitHub environment setup, OIDC subject format); no successful release yet. Earlier "not yet executed" statements in this file are kept as historical record. GitHub CLI 2.105.0 installed from the official, checksum- and signature-verified MSI; the owner signed in. Changes committed to `dev`, pull request `dev` -> `main` opened; CI checked on the pull request.
