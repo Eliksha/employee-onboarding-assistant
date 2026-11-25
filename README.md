@@ -6,17 +6,34 @@ EY GDS capstone project - Domain: Generative AI for Human Resources.
 
 > **Data notice:** all content is synthetic. The handbook describes a fictional company (NovaTech Solutions) and the three demo employees (EMP001-EMP003) are fictional. Local email/password authentication protects the demo, but this build has not been security-assessed for real employee data.
 
+**Live application (Azure):** https://onboardai-eliksha-frontend-e4ehc5caahajdshh.southindia-01.azurewebsites.net - sign-in required; accounts are provisioned by the administrator (no self-registration).
+
+**Contents:** [Results at a glance](#results-at-a-glance) | [Features](#features) | [Architecture](#architecture) | [Technology stack](#technology-stack) | [Repository layout](#repository-layout) | [Configuration](#configuration) | [Local development](#local-development-windows-powershell) | [Docker Compose](#docker-compose) | [RAG workflow](#rag-workflow-and-guardrails) | [Security](#authentication-and-authorization) | [API](#api-endpoints) | [Testing](#testing) | [Azure deployment and CI/CD](#azure-deployment) | [Limitations](#known-limitations) | [Documentation](#documentation)
+
+## Results at a glance
+
+| Evidence | Result |
+|---|---|
+| Production verification on Azure (25 Nov 2026) | **17/17** checks (8 public, 9 signed-in); grounded GPT-4.1 answer citing handbook.pdf page 3 in **4232 ms** (target < 5000 ms) |
+| RAG evaluation, Azure OpenAI GPT-4.1 | **50/50** (index 6, retrieval 17, grounding 17, unknown questions 7, prompt injection 3); retrieval MRR 0.971 |
+| Held-out hybrid evaluation (62 questions), GPT-4.1 | routing **62/62**, records answers 26/26, grounded handbook answers 30/30, mixed answers 10/10, unauthorized refused 8/8, out-of-scope fallback 6/6 |
+| Automated tests | backend **711 passed**; live PostgreSQL security suite **133 passed**; frontend 11 passed; GitHub Actions CI run #9 passed (`f69b3bc`) |
+| Database migration to Azure | 12/12 table fingerprints identical, TLS 1.3 verify-full inside the VNet |
+| Image security (24-25 Nov 2026) | Trivy: 0 fixable HIGH/CRITICAL vulnerabilities, 0 secrets in both production images |
+
+Full evidence: [docs/submission_evidence.md](docs/submission_evidence.md).
+
 ## Project status
 
 | Area | Status |
 |---|---|
-| Backend (FastAPI), RAG (FAISS + fastembed), guardrails | Implemented and tested locally |
-| Frontend (React + Vite) | Implemented; browser end-to-end checks passed |
+| Backend (FastAPI), RAG (FAISS + fastembed), guardrails | Implemented, tested and deployed on Azure |
+| Frontend (React + Vite) | Implemented and deployed on Azure (nginx) |
 | Persistence | PostgreSQL 16 (primary), SQLite (local fallback and tests) |
 | Docker Compose (frontend + backend + PostgreSQL) | Implemented and verified locally |
 | LLM provider | **Azure OpenAI, GPT-4.1 deployment** (OpenAI v1 Responses API, `store=false`) |
 | Azure deployment | **Deployed and verified (25 Nov 2026)** - App Service (frontend public, backend behind a private endpoint), private PostgreSQL Flexible Server 16, Azure Container Registry, Azure OpenAI; production verification 17/17 passed. See [Azure deployment](#azure-deployment) |
-| Authentication / authorization | Email + password (Argon2id), server-side sessions, CSRF protection, per-employee authorization, admin role - implemented and tested locally |
+| Authentication / authorization | Email + password (Argon2id), server-side sessions, CSRF protection, per-employee authorization, `admin` and `hr` roles - implemented, tested and verified in production |
 | External identity (Microsoft Entra ID / OAuth) | Not implemented (out of scope for now) |
 | Continuous integration (GitHub Actions) | Implemented: backend, live PostgreSQL security suite, frontend and Docker build jobs on every push and pull request |
 | Continuous delivery (GitHub Actions) | **Implemented, not yet executed** (`.github/workflows/cd.yml`: manual, main only, CI-gated, approval environment, OIDC, scan, deploy, verify, automatic rollback). Operational after its first successful release |
@@ -27,9 +44,11 @@ Detailed progress, decisions and test evidence: [docs/project_plan.md](docs/proj
 
 - **AI Assistant** - answers handbook questions with citations (for example `[Handbook 2.1]`), shows only the sources the answer actually cites, and returns a safe fallback with HR/IT contacts when the answer is not in the handbook.
 - **Employee-specific answers** - questions such as "What is my leave balance?" are routed to approved database queries (no LLM involved).
+- **Mixed questions** - "How much casual leave do I have left, and how far in advance must I apply?" returns both parts in one answer ("From your records" / "From the handbook").
+- **Safety** - refuses questions about other employees, answers out-of-scope questions with a safe fallback, and resists prompt injection (retrieved text screened, output validated).
 - **Secure sign-in** - email and password; each employee sees only their own data; sign out from any page.
 - **Chat history** per employee.
-- **Feedback and escalation from chat** - rate any answer (Helpful / Not helpful) or escalate it to HR/IT in one click; the escalation records who escalated which answer (M5).
+- **Feedback and escalation from chat** - rate any answer (Helpful / Not helpful) or escalate it to HR/IT in one click; escalations enter an HR/IT queue with status transitions and an audit trail (`hr` role, API).
 - **Onboarding checklist** - 15 tasks per employee; completion is saved.
 - **Leave & Payroll** - leave balances and the payroll calendar.
 - **My Assets** - assigned IT equipment.
@@ -71,8 +90,10 @@ More detail, including the RAG decision flow and the deployed Azure network diag
 | Retrieval | fastembed (`BAAI/bge-small-en-v1.5`, local, no API key), FAISS `IndexFlatIP` (cosine) |
 | LLM | Azure OpenAI GPT-4.1 deployment through the OpenAI Python SDK (v1 Responses API, API key, `store=false`) |
 | Database | PostgreSQL 16 (psycopg2); SQLite fallback |
-| Containers | Docker, Docker Compose |
-| Testing | pytest, Node test runner, locust (load test), RAG and held-out hybrid evaluation scripts, GitHub Actions CI |
+| Containers | Docker, Docker Compose (local); production images built from `deploy/azure/*.Dockerfile` |
+| Cloud (Azure) | App Service (Linux, sitecontainers) x2, Azure Database for PostgreSQL Flexible Server 16 (VNet-injected), Virtual Network + private endpoint + private DNS, Azure Container Registry, Azure OpenAI, managed identities |
+| Testing | pytest, Node test runner, locust (load test), RAG and held-out hybrid evaluation scripts |
+| CI/CD | GitHub Actions: CI on every push/PR; CD (manual, approval-gated, OIDC) to Azure, Trivy image scanning |
 
 ## Repository layout
 
@@ -312,7 +333,7 @@ Install the pinned development tools first: `pip install -r requirements-dev.txt
 | `bash tests/load/run_isolated_load_test.sh` | Small load test (locust) against a throw-away stack with least-privilege roles; `WITH_EVAL=1` also runs the HTTP evaluation | See [docs/load_test_report.md](docs/load_test_report.md) |
 | `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs the Azure OpenAI settings, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (Azure OpenAI GPT-4.1, 24 Nov 2026; retrieval MRR 0.971) |
 
-**Continuous integration** (`.github/workflows/ci.yml`, on pushes to `dev`/`main`, pull requests and manual runs): backend tests on Python 3.12 with the index built from `data/raw` and a no-skip check; the live PostgreSQL security suite against a disposable `postgres:16-alpine` container with a per-job random password; frontend test/lint/build on Node 24; Docker image builds with smoke checks (pip check, import, no dev tools in the image, non-root user) and `docker compose config`. No deployment, no image push, no real secrets (the LLM is mocked). Latest runs: #7 (`df18ffd`, Azure deployment) and #8 (`6427fd7`, submission cleanup), all jobs passed. Continuous delivery (`cd.yml`) is a separate, manual workflow that requires such a successful CI run for the release commit on `main`; it is implemented but not yet executed.
+**Continuous integration** (`.github/workflows/ci.yml`, on pushes to `dev`/`main`, pull requests and manual runs): backend tests on Python 3.12 with the index built from `data/raw` and a no-skip check; the live PostgreSQL security suite against a disposable `postgres:16-alpine` container with a per-job random password; frontend test/lint/build on Node 24; Docker image builds with smoke checks (pip check, import, no dev tools in the image, non-root user) and `docker compose config`. No deployment, no image push, no real secrets (the LLM is mocked). Latest runs: #7 (`df18ffd`, Azure deployment), #8 (`6427fd7`, submission cleanup) and #9 (`f69b3bc`, CD workflow and architecture diagram), all jobs passed. Continuous delivery (`cd.yml`) is a separate, manual workflow that requires such a successful CI run for the release commit on `main`; it is implemented but not yet executed.
 
 **Production verification on Azure** (`deploy/azure/70-Verify-Deployment.ps1`, 25 Nov 2026): **17/17 passed** (8 public, 9 signed-in), grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms. See [Azure deployment](#azure-deployment).
 
@@ -371,14 +392,17 @@ Remaining Azure improvements (not implemented):
 
 ## Documentation
 
+- [docs/submission_evidence.md](docs/submission_evidence.md) - consolidated test, performance, deployment and production-verification evidence (source for the final PDF/PPT)
+- [docs/presentation_script.md](docs/presentation_script.md) - 5-7 minute presentation and live Azure demonstration, with expected questions and answers
 - [docs/project_plan.md](docs/project_plan.md) - milestones, step-by-step progress, test evidence, risks
-- [docs/final_local_test_report.md](docs/final_local_test_report.md) - final local test results, known issues, Azure prerequisites
+- [docs/final_local_test_report.md](docs/final_local_test_report.md) - historical local release test (21 Nov 2026)
 - [docs/runbook.md](docs/runbook.md) - start/stop, health checks, logs, troubleshooting
 - [deploy/azure/README.md](deploy/azure/README.md) - Azure deployment runbook (scripts, order, migration, verification, rollback)
-- [docs/demo_script.md](docs/demo_script.md) - 10-minute demonstration walkthrough
+- [docs/demo_script.md](docs/demo_script.md) - earlier 10-minute walkthrough of the local Docker stack (historical)
 - [docs/architecture.md](docs/architecture.md) - architecture and RAG flow
-- [docs/rag_eval_report.md](docs/rag_eval_report.md) - latest RAG evaluation output
-- [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md) - held-out hybrid chat evaluation (routing, records, grounding, citations, latency)
+- [docs/rag_eval_report.md](docs/rag_eval_report.md) - RAG evaluation with GPT-4.1 (50/50)
+- [docs/azure_eval_report.md](docs/azure_eval_report.md) - held-out hybrid evaluation with GPT-4.1 on the production images
+- [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md) - earlier held-out evaluation (Groq era, historical)
 - [docs/load_test_report.md](docs/load_test_report.md) - load test environment and results
 - [docs/problem_statement.md](docs/problem_statement.md) - capstone problem statement
 - [frontend/README.md](frontend/README.md) - frontend notes

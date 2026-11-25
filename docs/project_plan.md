@@ -2177,3 +2177,23 @@ Trivy secret scan on the current production images - 0 secrets (backend and fron
 images - completed, nothing found; failure path - a failed `docker run` stops the step (exit 125); live probe -
 `/api/health` 200 with healthy JSON, `/api/ready` 404 not counted as healthy. Documentation: `README.md`,
 `deploy/azure/README.md` (section 8), `docs/architecture.md` (CI/CD diagram).
+
+---
+
+## Submission Preparation (25 Nov 2026)
+
+Base: commit `f69b3bc` (CD workflow + final architecture diagram), CI run #9 passed on `dev`. The owner will merge into
+`main` and run the first CD release; **CD has not been executed yet**. No application logic, Azure resource,
+deployment or Git history was changed; the architecture image `docs/architecture-final.png` was not modified
+(byte-identical in the ZIP).
+
+| Deliverable | Location | Content |
+|---|---|---|
+| README finalised | `README.md` | live application URL (public frontend), contents line, "Results at a glance" (verified figures only), status rows updated to the Azure deployment, features (mixed questions, safety, HR/IT queue), technology stack incl. Azure services and CI/CD, CI runs #7-#9, documentation index (new documents; historical reports labelled) |
+| Evidence document | `docs/submission_evidence.md` | success criteria vs results, features, automated tests, GPT-4.1 RAG (50/50) and held-out (62 questions) evaluations, performance (production 4232 ms; held-out latency by route; historical local load test labelled), Azure infrastructure, executed deployment steps, in-VNet migration (12/12 fingerprints), 17/17 production verification, security evidence, CI/CD status (CD implemented, not executed), limitations, sources |
+| Presentation + demo | `docs/presentation_script.md` | 5-7 minute timeline, live Azure demo using questions verified with GPT-4.1 (handbook, mixed, unauthorized, out-of-scope, escalation), fallback plan, 15 expected questions with answers |
+| Draft submission ZIP | `..\submission\OnboardAI-submission-20261125-draft.zip` (outside the repository) | 189 files (tracked + new, git-ignore rules), 2.2 MB; excluded: `.git`, `.env`, secrets/config files, dumps, databases, backups, logs, caches, `node_modules`, `dist`, `.venv`, generated index |
+
+ZIP checks: 0 forbidden entries; `.env.example`, both architecture images, CD workflow and new documents present;
+extracted contents scanned against every secrets-file value and Azure identifier (16 values, 186 text files): 0 hits;
+only the public frontend URL appears (intentionally). To be regenerated after the first successful CD release.
