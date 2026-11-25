@@ -219,6 +219,18 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           allow-no-subscriptions: true     # the identity has resource-scoped roles only
+      - name: Azure context check (before any registry push or deployment)
+        run: |
+          set -euo pipefail
+          echo "Azure CLI $(az version --query '"azure-cli"' -o tsv)"
+          az webapp sitecontainers update --help >/dev/null || { echo "::error::This Azure CLI has no 'webapp sitecontainers' commands."; exit 1; }
+          [ "$(az account show --query id -o tsv)" = "$AZ_SUB" ] || az account set --subscription "$AZ_SUB" ||
+            { echo "::error::The CD identity cannot select the subscription (check its role assignments)."; exit 1; }
+          for app in "$BACKEND_APP" "$FRONTEND_APP"; do
+            az webapp show -g "$AZ_RG" -n "$app" --subscription "$AZ_SUB" --query name -o tsv >/dev/null ||
+              { echo "::error::The CD identity cannot read Web App $app (Website Contributor missing?)."; exit 1; }
+          done
+          echo "subscription selected; both Web Apps readable; sitecontainer commands available"
       - name: Capture current production images and configuration (rollback point)
         id: before
         run: |
