@@ -9,7 +9,7 @@ Target: South India; shared Linux App Service plan (B1); Web Apps `onboardai-eli
 Database for PostgreSQL Flexible Server 16 (private, VNet-injected); Azure OpenAI GPT-4.1. FAISS index and handbook PDF
 are bundled in the backend image.
 
-**Status: deployed and verified on 25 November 2026** (production verification 17/17). Executed order:
+**Status: deployed and verified on 25 November 2026** (production verification 17/17; later CD #4 release 50/51 over 3 runs). Executed order:
 `05 -> 00 -> 20 -> 30 -> 40 (-HardenOnly) -> 15 -> 10 -> 50 -> 65 -> 40 -> 45 -> admin password rotation -> 70`.
 
 Deployed network:
@@ -143,7 +143,7 @@ Remove-Item Env:VERIFY_PW
 17 checks: 8 public (frontend health, HSTS/CSP/X-Frame-Options/nosniff, API health with database, docs and readiness
 hidden, sign-in required, generic login error, backend not usable directly) and 9 signed-in (secure cookie, own data,
 other employees refused, GPT-4.1 answer citing handbook.pdf p. 3 within 5 s, fallback, history, sign-out).
-**Production (25 Nov 2026): 17/17 passed; grounded answer in 4232 ms.**
+**Production: first release 17/17 (grounded answer 4232 ms); CD #4 release 50/51 over 3 runs (latency 5086 / 2135 / 1752 ms; the only failure was run 1's latency).**
 
 Trusted proxy hops (rate limiting per client): after deployment, 20 failed sign-ins from one network must block that
 client only, not a second client on another network. If a second client is also blocked, the hop count is too low.
@@ -165,7 +165,7 @@ login. When administrator access is needed, reset it and keep the new value in t
 
 ## 8. Continuous delivery (GitHub Actions)
 
-**Status: implemented (25 Nov 2026); first runs #1-#3 (25 Nov 2026) stopped safely before any production change; both causes - GitHub environment setup and the OIDC subject format - are fixed; no successful release yet.** CD is operational only after its first successful release
+**Status: operational** - first successful, verified release: CD run #4 (deployed digests verified, configuration unchanged, 8/8 public checks; post-release verification 50/51 over 3 runs). Runs #1-#3 stopped safely before any production change (GitHub environment setup, OIDC subject format; both fixed). CD status history
 (recorded in `docs/project_plan.md`). Workflow: [`.github/workflows/cd.yml`](../../.github/workflows/cd.yml); helper:
 [`cd-release.sh`](cd-release.sh).
 

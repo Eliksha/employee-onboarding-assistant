@@ -336,7 +336,7 @@ python -m scripts.rag_eval
 
 ## 14. Production releases (GitHub Actions CD)
 
-**Status:** implemented 25 November 2026; first runs #1-#3 (25 Nov 2026) stopped safely before any production change; both causes - GitHub environment setup and the OIDC subject format - are fixed; no successful release yet. Design, identity and GitHub configuration: [deploy/azure/README.md, section 8](../deploy/azure/README.md#8-continuous-delivery-github-actions).
+**Status:** operational - first successful, verified release: CD run #4 (approved in `production`). Runs #1-#3 stopped safely before any production change (GitHub environment setup, OIDC subject format; both fixed). Design, identity and GitHub configuration: [deploy/azure/README.md, section 8](../deploy/azure/README.md#8-continuous-delivery-github-actions).
 
 **Release:** merge `dev` into `main` -> wait for CI on `main` to pass -> Actions -> **CD** -> Run workflow (branch `main`, `confirm` = `deploy`) -> after the `build` job passes, approve the `production` deployment -> check the job summary (commit, image tags and digests, previous images). Then run the 9 signed-in checks locally (unless the owner approved a test credential for CD):
 
