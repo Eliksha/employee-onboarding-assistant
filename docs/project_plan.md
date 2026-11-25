@@ -2272,3 +2272,75 @@ jq-free helper/guarded masking and the post-login context check).
 for the resource-scoped identity (now checked fail-safe before any change), AcrPush push as the identity,
 `az webapp sitecontainers update` under Website Contributor, the real restart/health timing and an actual rollback.
 CD remains **not operational** until a release succeeds.
+
+---
+
+## Security Incident: Operator Tokens Printed During Local CD Testing (25 Nov 2026)
+
+**What happened (09:10 UTC):** while the CD helper's registry sign-in was exercised locally (read-only test, operator
+account), its `::add-mask::` lines - which GitHub Actions hides - printed two short-lived tokens in plain text to the
+local assistant session output: the operator's Azure Resource Manager access token (valid to 10:38 UTC) and an Azure
+Container Registry refresh token (push/delete rights on the registry, valid to 12:10 UTC). Neither belongs to the CD
+identity; no application credential, database credential or publishing credential was involved.
+
+**Exposure assessment:**
+| Location | Result |
+|---|---|
+| Local Claude Code session transcript (one record) | contained both tokens -> **redacted** (see below) |
+| AI assistant conversation | the output was part of the session processed by the assistant service; no other third party |
+| Repository files (tracked/untracked/ignored), Git history | not present; never committed or pushed |
+| GitHub Actions logs | not present (local test; no workflow ran after 09:03 UTC) |
+| Scratchpad/task outputs, Azure CLI logs, shell history, Docker credential store | not present (registry logins were logged out) |
+
+**Activity review:** Azure activity log for the resource group from 08:50 UTC - 22 events, all from the operator
+account and the operator's IP, each matching a known operator command (publishing-profile reads made internally by
+`az webapp sitecontainers`, the federated-credential update); none since 09:10 UTC; no unknown caller or IP.
+Registry: no new or changed tags since 04:34 UTC; the production tags' digests are identical to the images pushed from
+the operator machine on 24 Nov (backend `sha256:adbb53ceb9b6...`, frontend `sha256:a26b2cfd5c00...`). Pulls cannot
+be audited (no registry diagnostic logging). Production unchanged and healthy.
+
+**Containment (owner-approved):**
+1. Transcript redaction (09:23 UTC): both values replaced with `[REDACTED-EXPOSED-TOKEN]` by an atomic rewrite (no
+   backup copy); verified 0 remaining occurrences of either value in the transcript and in every file under `~/.claude`.
+2. Session revocation (09:25 UTC): Microsoft Graph `revokeSignInSessions` for the operator account succeeded
+   (self-service; no administrator needed) - refresh tokens and sign-in sessions invalidated. Limits: the already
+   issued ARM access token is not revocable and lapses at 10:38 UTC; the ACR refresh token is registry-issued and may
+   remain usable until 12:10 UTC. The operator's Azure CLI and portal sessions must sign in again.
+3. Pre-CD recheck (09:24 UTC): digests unchanged, no new tags, both apps on `78b80ee-202611241823`, backend public
+   access Disabled, frontend `/healthz` 200, `/api/health` 200 `{"status":"ok","database":"ok"}`, backend direct 403,
+   no activity-log events since 09:10 UTC.
+4. Root-cause fix: `deploy/azure/cd-release.sh` emits mask commands only when `GITHUB_ACTIONS=true`; re-test printed
+   no token.
+
+**Before approving CD (until 12:10 UTC):** re-verify the two production digests above (a CD rollback re-pulls the
+`78b80ee-202611241823` tags). No application credentials or production resources were changed.
+
+### Incident follow-up: residual risk assessment and CD decision (09:30 UTC)
+
+**Operator ARM access token (valid to 10:38 UTC):** audience Azure Resource Manager only (no Microsoft Graph, Key Vault
+data plane, database or GitHub access); not CAE-capable, so the 09:25 revocation does not shorten it (the revocation
+*is* enforced for CAE-capable tokens - a cached Graph token was rejected with `TokenIssuedBeforeRevocationTimestamp`).
+Reach: the operator's resource-group role could read secrets via POST actions (Web Apps `config/list` - Azure OpenAI
+key, database role passwords, scope and proxy secrets; Azure OpenAI `listKeys`), change PostgreSQL/network settings,
+add role assignments or add a federated credential to the CD identity. Such actions are recorded in the activity log
+(POST actions are logged, as the operator's own `publishxml` entries show). **Evidence: 30 events 08:50 UTC -> 09:30
+UTC, all from the operator account and operator IP, each matching a known operator command; no `config/list`,
+`listKeys`, `listCredentials`, role-assignment, firewall, administrator or delete operation by anyone.** The only
+credential-bearing reads were the operator's own publishing-profile reads made internally by `az webapp
+sitecontainers` (publishing credentials are unusable: SCM/FTP basic auth disabled on both apps). No evidence that
+any other credential was accessed.
+
+**ACR refresh token (valid to 12:10 UTC):** registry-issued, push/overwrite/delete rights, not revocable on the Basic
+tier (no network rules or public-access switch on Basic; changing the registry's permission mode would break the
+apps' AcrPull image pulls). Effect of misuse would be limited to images; production is affected only when an image is
+pulled (restart, CD, rollback) and tampering is detectable by digest. Partial containment available (not applied):
+lock the two `78b80ee-202611241823` tags (write/delete disabled, read enabled) - no production or CD impact, reversible,
+but a holder of the token could unlock them. Evidence: tags and digests unchanged (backend `sha256:adbb53ceb9b6...`,
+frontend `sha256:a26b2cfd5c00...`).
+
+**Decision: CONDITIONAL GO for CD, not before 10:38 UTC (16:08 IST)**, when the ARM token has expired, and only if,
+immediately before approving the release: (1) both production digests still match, (2) the activity log since 08:50
+UTC still shows only operator events from the operator IP, (3) production health is OK. After the release: the
+registry digests of the new tags must equal the digests in the CD job summary. Any mismatch -> NO-GO / stop and
+investigate. Strictly lowest-risk alternative: start CD after 12:10 UTC (17:40 IST), when the registry token has
+expired as well.
