@@ -1,70 +1,103 @@
 # OnboardAI: RAG-Powered New Joiner Support Platform
 
-OnboardAI helps new employees find onboarding information (leave, payroll, benefits, IT setup, HR policies) without waiting for HR or IT. It answers policy questions from an approved handbook using retrieval-augmented generation (RAG), cites its sources, refuses to guess when the handbook does not contain the answer, and gives each signed-in employee a private workspace for leave balances, assets, an onboarding checklist and support tickets.
+OnboardAI helps new employees find onboarding information - leave, payroll, benefits, IT setup and HR policies - without waiting for HR or IT.
 
-EY GDS capstone project - Domain: Generative AI for Human Resources.
+- Answers policy questions from an approved handbook using retrieval-augmented generation (RAG) and cites its sources.
+- Refuses to guess when the handbook does not contain the answer.
+- Gives each signed-in employee a private workspace: leave balances, assets, onboarding checklist and support tickets.
+- EY GDS capstone project - Domain: Generative AI for Human Resources.
 
-> **Data notice:** all content is synthetic. The handbook describes a fictional company (NovaTech Solutions) and the three demo employees (EMP001-EMP003) are fictional. Local email/password authentication protects the demo, but this build has not been security-assessed for real employee data.
+> **Data notice:** all content is synthetic. The handbook describes a fictional company (NovaTech Solutions) and the demo employees (EMP001-EMP003) are fictional. The application has not been security-assessed for real employee data.
 
-**Live application (Azure):** https://onboardai-eliksha-frontend-e4ehc5caahajdshh.southindia-01.azurewebsites.net - sign-in required; accounts are provisioned by the administrator (no self-registration).
+**Live application (Azure):** https://onboardai-eliksha-frontend-e4ehc5caahajdshh.southindia-01.azurewebsites.net
 
-**Contents:** [Results at a glance](#results-at-a-glance) | [Features](#features) | [Architecture](#architecture) | [Technology stack](#technology-stack) | [Repository layout](#repository-layout) | [Configuration](#configuration) | [Local development](#local-development-windows-powershell) | [Docker Compose](#docker-compose) | [RAG workflow](#rag-workflow-and-guardrails) | [Security](#authentication-and-authorization) | [API](#api-endpoints) | [Testing](#testing) | [Azure deployment and CI/CD](#azure-deployment) | [Limitations](#known-limitations) | [Documentation](#documentation)
+- Sign-in required; accounts are provisioned by an administrator (no self-registration).
+
+## Contents
+
+- [Results at a glance](#results-at-a-glance)
+- [Project status](#project-status)
+- [Features](#features)
+- [Scope](#scope)
+- [Architecture](#architecture)
+- [Technology stack](#technology-stack)
+- [Repository layout](#repository-layout)
+- [Configuration](#configuration)
+- [Local development](#local-development-windows-powershell)
+- [Docker Compose](#docker-compose)
+- [Operations runbook](#operations-runbook)
+- [RAG workflow and guardrails](#rag-workflow-and-guardrails)
+- [Security](#security)
+- [API endpoints](#api-endpoints)
+- [Testing](#testing)
+- [Azure deployment](#azure-deployment)
+- [CI/CD](#cicd)
+- [Known limitations](#known-limitations)
+- [Documentation](#documentation)
+- [Author](#author)
 
 ## Results at a glance
 
-| Evidence | Result |
-|---|---|
-| Production verification on Azure (25 Nov 2026) | **17/17** checks (8 public, 9 signed-in); grounded GPT-4.1 answer citing handbook.pdf page 3 in **4232 ms** (target < 5000 ms) |
-| RAG evaluation, Azure OpenAI GPT-4.1 | **50/50** (index 6, retrieval 17, grounding 17, unknown questions 7, prompt injection 3); retrieval MRR 0.971 |
-| Held-out hybrid evaluation (62 questions), GPT-4.1 | routing **62/62**, records answers 26/26, grounded handbook answers 30/30, mixed answers 10/10, unauthorized refused 8/8, out-of-scope fallback 6/6 |
-| Automated tests | backend **711 passed**; live PostgreSQL security suite **133 passed**; frontend 11 passed; GitHub Actions CI run #9 passed (`f69b3bc`) |
-| Database migration to Azure | 12/12 table fingerprints identical, TLS 1.3 verify-full inside the VNet |
-| Image security (24-25 Nov 2026) | Trivy: 0 fixable HIGH/CRITICAL vulnerabilities, 0 secrets in both production images |
-
-Full evidence: [docs/submission_evidence.md](docs/submission_evidence.md).
+- **Production verification on Azure:** 17/17 checks (8 public, 9 signed-in); grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms (target < 5000 ms).
+- **Continuous delivery:** a verified production release built, scanned and deployed both images through the approval-gated pipeline; deployed digests verified, configuration unchanged, 8/8 public checks.
+- **RAG evaluation (GPT-4.1):** 50/50 - index 6, retrieval 17, grounding 17, unknown questions 7, prompt injection 3; retrieval MRR 0.971.
+- **Held-out hybrid evaluation (62 questions, GPT-4.1):** routing 62/62, records answers 26/26, grounded handbook answers 30/30, mixed answers 10/10, unauthorized refused 8/8, out-of-scope fallback 6/6.
+- **Automated tests:** backend 718 passed; live PostgreSQL security suite 133 passed; frontend 11 passed; CI green on `main`.
+- **Database migration to Azure:** 12/12 table fingerprints identical over TLS 1.3 inside the virtual network.
+- **Image security:** Trivy reports 0 fixable HIGH/CRITICAL vulnerabilities and 0 secrets in both production images.
 
 ## Project status
 
-| Area | Status |
-|---|---|
-| Backend (FastAPI), RAG (FAISS + fastembed), guardrails | Implemented, tested and deployed on Azure |
-| Frontend (React + Vite) | Implemented and deployed on Azure (nginx) |
-| Persistence | PostgreSQL 16 (primary), SQLite (local fallback and tests) |
-| Docker Compose (frontend + backend + PostgreSQL) | Implemented and verified locally |
-| LLM provider | **Azure OpenAI, GPT-4.1 deployment** (OpenAI v1 Responses API, `store=false`) |
-| Azure deployment | **Deployed and verified (25 Nov 2026)** - App Service (frontend public, backend behind a private endpoint), private PostgreSQL Flexible Server 16, Azure Container Registry, Azure OpenAI; production verification 17/17 passed. See [Azure deployment](#azure-deployment) |
-| Authentication / authorization | Email + password (Argon2id), server-side sessions, CSRF protection, per-employee authorization, `admin` and `hr` roles - implemented, tested and verified in production |
-| External identity (Microsoft Entra ID / OAuth) | Not implemented (out of scope for now) |
-| Continuous integration (GitHub Actions) | Implemented: backend, live PostgreSQL security suite, frontend and Docker build jobs on every push and pull request |
-| Continuous delivery (GitHub Actions) | **Implemented; no successful release yet** (runs #1-#3 stopped safely before any production change; causes fixed) (`.github/workflows/cd.yml`: manual, main only, CI-gated, approval environment, OIDC, scan, deploy, verify, automatic rollback). Operational after its first successful release |
-
-Detailed progress, decisions and test evidence: [docs/project_plan.md](docs/project_plan.md).
+- **Backend** (FastAPI), RAG (FAISS + fastembed) and guardrails - implemented, tested, deployed on Azure.
+- **Frontend** (React + Vite, served by nginx) - implemented, deployed on Azure.
+- **Persistence** - PostgreSQL 16 (primary); SQLite for local fallback and tests.
+- **LLM provider** - Azure OpenAI, GPT-4.1 deployment.
+- **Docker Compose** (frontend + backend + PostgreSQL) - implemented and verified locally.
+- **Azure deployment** - deployed and verified: App Service (public frontend, private backend), private PostgreSQL Flexible Server 16, Azure Container Registry, Azure OpenAI.
+- **Authentication and authorization** - email + password (Argon2id), server-side sessions, CSRF protection, per-employee authorization, `admin` and `hr` roles.
+- **Continuous integration** - GitHub Actions on every push and pull request; required on `main` by branch protection.
+- **Continuous delivery** - operational; production releases are **manually triggered and require reviewer approval** (no automatic Azure deployments).
+- **External identity** (Microsoft Entra ID / OAuth) - not implemented.
 
 ## Features
 
-- **AI Assistant** - answers handbook questions with citations (for example `[Handbook 2.1]`), shows only the sources the answer actually cites, and returns a safe fallback with HR/IT contacts when the answer is not in the handbook.
-- **Employee-specific answers** - questions such as "What is my leave balance?" are routed to approved database queries (no LLM involved).
-- **Mixed questions** - "How much casual leave do I have left, and how far in advance must I apply?" returns both parts in one answer ("From your records" / "From the handbook").
-- **Safety** - refuses questions about other employees, answers out-of-scope questions with a safe fallback, and resists prompt injection (retrieved text screened, output validated).
-- **Secure sign-in** - email and password; each employee sees only their own data; sign out from any page.
+- **AI Assistant** - answers handbook questions with citations (for example `[Handbook 2.1]`), shows only the sources the answer cites, and returns a safe fallback with HR/IT contacts when the handbook has no answer.
+- **Employee-specific answers** - "What is my leave balance?" is answered from approved database queries (no LLM involved).
+- **Mixed questions** - "How much casual leave do I have left, and how far in advance must I apply?" returns both parts ("From your records" / "From the handbook") in one answer.
+- **Safety** - refuses questions about other employees, answers out-of-scope questions with a safe fallback, and resists prompt injection.
+- **Secure sign-in** - each employee sees only their own data; sign out from any page.
 - **Chat history** per employee.
-- **Feedback and escalation from chat** - rate any answer (Helpful / Not helpful) or escalate it to HR/IT in one click; escalations enter an HR/IT queue with status transitions and an audit trail (`hr` role, API).
+- **Feedback and escalation** - rate answers (Helpful / Not helpful) or escalate one to an HR/IT queue with status transitions and an audit trail.
 - **Onboarding checklist** - 15 tasks per employee; completion is saved.
 - **Leave & Payroll** - leave balances and the payroll calendar.
 - **My Assets** - assigned IT equipment.
 - **Support Center** - create HR/IT/Payroll tickets and view ticket history.
 
+## Scope
+
+- **Primary users:** new joiners in their first 90 days.
+- **Secondary users:** HR and IT support teams (content owners, escalation receivers).
+- **Out of scope:**
+  - Single sign-on and external identity providers (local email/password sign-in is provided)
+  - HRMS or email integration
+  - Admin upload page
+  - Multilingual support
+  - Analytics
+  - Automated approvals
+  - Legal/medical interpretation
+  - Real employee data
+
 ## Architecture
 
-![OnboardAI end-to-end architecture on Azure: user, App Service frontend and backend, agent orchestration with guardrails and human review, RAG pipeline, Azure OpenAI GPT-4.1, PostgreSQL data layer, and GitHub CI/CD with Azure Container Registry](docs/architecture-final.png)
+![OnboardAI end-to-end architecture on Azure: user, App Service frontend and backend, agent orchestration (request classifier, policy analyst, status and response roles) with guardrails and HR/IT human review, RAG pipeline (pypdf, section-aware 2-sentence windows, FastEmbed, FAISS), Azure OpenAI GPT-4.1, PostgreSQL data layer, and GitHub CI/CD with manual, approval-gated delivery to Azure Container Registry and App Service](docs/architecture.png)
 
-*Conceptual overview. Exact network isolation, RAG implementation and CI/CD details: [docs/architecture.md](docs/architecture.md).*
+- Conceptual overview; exact network isolation, RAG implementation and CI/CD details are in [docs/architecture.md](docs/architecture.md).
 
 Application request flow:
 
 ```mermaid
 flowchart LR
-    user["Browser"] --> fe["React SPA<br/>(Vite dev server or nginx in Docker)"]
+    user["Browser"] --> fe["React SPA<br/>(Vite dev server or nginx)"]
     fe -->|"/api/* same origin, /api prefix stripped"| api["FastAPI backend<br/>request ID, logging, error handling"]
     api --> orch{"Orchestrator<br/>deterministic router"}
     orch -->|"records intent (allow-listed)"| edb[("PostgreSQL 16<br/>or SQLite")]
@@ -72,28 +105,24 @@ flowchart LR
     rag --> emb["fastembed<br/>BAAI/bge-small-en-v1.5"]
     rag --> idx[("FAISS index<br/>data/index")]
     rag --> guard["Guardrails<br/>retrieval gate, output validation"]
-    guard --> llm["Azure OpenAI<br/>GPT-4.1 deployment<br/>v1 Responses API, store=false"]
+    guard --> llm["Azure OpenAI<br/>GPT-4.1 deployment"]
     api -->|"chat history, tickets, checklist"| edb
     fe -->|"POST /api/auth/login"| authn["Auth: Argon2id passwords,<br/>server-side sessions, CSRF,<br/>login rate limiting"]
     authn --> edb
-    raw["data/raw<br/>handbook.md, faqs.md"] -->|"python -m backend.services.ingest"| idx
+    raw["data/raw<br/>handbook.pdf, faqs.md"] -->|"python -m backend.services.ingest"| idx
 ```
-
-More detail, including the RAG decision flow and the deployed Azure network diagram: [docs/architecture.md](docs/architecture.md).
 
 ## Technology stack
 
-| Layer | Technology |
-|---|---|
-| Frontend | React 19, Vite, axios, lucide-react; nginx (Docker) |
-| Backend | Python, FastAPI, Pydantic, Uvicorn |
-| Retrieval | fastembed (`BAAI/bge-small-en-v1.5`, local, no API key), FAISS `IndexFlatIP` (cosine) |
-| LLM | Azure OpenAI GPT-4.1 deployment through the OpenAI Python SDK (v1 Responses API, API key, `store=false`) |
-| Database | PostgreSQL 16 (psycopg2); SQLite fallback |
-| Containers | Docker, Docker Compose (local); production images built from `deploy/azure/*.Dockerfile` |
-| Cloud (Azure) | App Service (Linux, sitecontainers) x2, Azure Database for PostgreSQL Flexible Server 16 (VNet-injected), Virtual Network + private endpoint + private DNS, Azure Container Registry, Azure OpenAI, managed identities |
-| Testing | pytest, Node test runner, locust (load test), RAG and held-out hybrid evaluation scripts |
-| CI/CD | GitHub Actions: CI on every push/PR; CD (manual, approval-gated, OIDC) to Azure, Trivy image scanning |
+- **Frontend:** React 19, Vite, axios, lucide-react; nginx.
+- **Backend:** Python, FastAPI, Pydantic, Uvicorn.
+- **Retrieval:** fastembed (`BAAI/bge-small-en-v1.5`, local, no API key); FAISS `IndexFlatIP` (cosine).
+- **LLM:** Azure OpenAI GPT-4.1 through the OpenAI Python SDK (v1 Responses API, `store=false`).
+- **Database:** PostgreSQL 16 (psycopg2); SQLite fallback.
+- **Containers:** Docker and Docker Compose (local); production images from `deploy/azure/*.Dockerfile`.
+- **Azure:** App Service (Linux, sitecontainers) x2, Azure Database for PostgreSQL Flexible Server 16 (VNet-injected), Virtual Network with private endpoint and private DNS, Azure Container Registry, Azure OpenAI, managed identities.
+- **Testing:** pytest, Node test runner, locust, RAG and held-out hybrid evaluation scripts.
+- **CI/CD:** GitHub Actions - CI on every push and pull request; manual, approval-gated CD to Azure with OIDC and Trivy image scanning.
 
 ## Repository layout
 
@@ -101,206 +130,205 @@ More detail, including the RAG decision flow and the deployed Azure network diag
 backend/            FastAPI app: routes/, services/ (rag, guardrails, retriever, llm, orchestrator, db), middleware/,
                     migrations/ (001-004 SQLite/auth tables, 005-008 PostgreSQL roles, integrity, HR queue)
 frontend/           React + Vite app, Dockerfile, nginx.conf (local Docker)
-deploy/azure/       Azure deployment scripts (PowerShell, dry run by default), Azure Dockerfiles, nginx template, migration tooling
+deploy/azure/       Azure deployment scripts (PowerShell, dry run by default), Azure Dockerfiles, CD helper, migration tooling
 data/raw/           Synthetic handbook (PDF canonical, Markdown copy), FAQs, checklist (knowledge base)
-data/csv/           Synthetic HR reference data for the CSV importer (matches the seed)
+data/csv/           Synthetic HR reference data for the CSV importer
 data/index/         Versioned FAISS index: versions/<id>/ + ACTIVE pointer (generated, git-ignored)
 docker/postgres/    PostgreSQL schema and synthetic seed used by Docker
-scripts/            rag_eval.py, hybrid_eval.py (evaluation), import_csv.py (CSV import), schema_dictionary.py (schema check), run_test_questions.py
+scripts/            rag_eval.py, hybrid_eval.py (evaluation), import_csv.py, schema_dictionary.py, run_test_questions.py
 tests/              unit/ and integration/ pytest suites, eval/ (held-out dataset), load/ (locust load test)
 .github/workflows/  ci.yml (tests, security suite, frontend, Docker build), cd.yml (approval-gated release to Azure)
-docs/               Project plan, architecture, runbook, evaluation and test reports (dated; earlier ones used Groq)
+docs/               Architecture, runbook, project plan, problem statement, load test and test reports
 Dockerfile, docker-compose.yml, .dockerignore, .env.example
 ```
 
 ## Configuration
 
-Settings are read from environment variables and the local `.env` file (see `backend/config.py`). Create `.env` from the template and fill in your own values; `.env` is git-ignored and must never be committed.
+- Settings come from environment variables and the local `.env` file (`backend/config.py`).
+- Create `.env` from the template; `.env` is git-ignored and must never be committed:
 
-```powershell
-Copy-Item .env.example .env
-```
+  ```powershell
+  Copy-Item .env.example .env
+  ```
 
-| Variable | Default (code) | Purpose |
-|---|---|---|
-| `AZURE_OPENAI_ENDPOINT` | empty | Azure resource v1 endpoint, e.g. `https://<resource>.services.ai.azure.com/openai/v1` (bare resource URL accepted; `AZURE_OPENAI_BASE_URL` is an alias) |
-| `AZURE_OPENAI_DEPLOYMENT` | empty | Azure deployment name (`gpt-4.1`) |
-| `AZURE_OPENAI_API_KEY` | empty | API key; required for chat answers (missing configuration -> 503, no request sent) |
-| `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` / `LLM_MAX_OUTPUT_TOKENS` | `30` / `2` / `600` | Request timeout, SDK retries, answer length limit |
-| `EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model (fastembed) |
-| `SIMILARITY_THRESHOLD` | `0.65` | Minimum top retrieval score |
-| `BORDERLINE_MARGIN` | `0.05` | Band below the threshold that needs keyword corroboration |
-| `TOP_K` | `4` | Passages retrieved per question |
-| `CHUNK_WORDS` / `CHUNK_OVERLAP_WORDS` | `350` / `40` | Chunking for ingestion |
-| `DB_BACKEND` | `sqlite` | `sqlite` or `postgresql` (`.env.example` uses `postgresql`) |
-| `DB_PATH` | `data/app.db` | SQLite file |
-| `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`, `PG_PASSWORD` | `localhost`, `5432`, `onboardai`, `postgres`, empty | PostgreSQL connection |
-| `INDEX_DIR`, `RAW_DIR`, `LOG_DIR` | `data/index`, `data/raw`, `logs` | File locations |
-| `DOCKER_PG_PASSWORD` | none (required) | Docker Compose only: password of the container database |
-| `BACKEND_PORT`, `FRONTEND_PORT` | `8000`, `8080` | Docker Compose host ports (bound to 127.0.0.1) |
-| `APP_ENV` | `development` | `production` disables the development account-provisioning tool |
-| `SESSION_TTL_MINUTES` / `SESSION_IDLE_MINUTES` | `480` / `60` | Absolute session lifetime / inactivity timeout |
-| `SESSION_COOKIE_SECURE` | `auto` | `auto` sets the cookie `Secure` flag for HTTPS requests; `true` forces it |
-| `TRUST_PROXY_HEADERS` | `false` | Use `X-Forwarded-For/-Proto` (only behind a trusted proxy; Docker Compose sets `true`) |
-| `LOGIN_MAX_FAILURES_PER_EMAIL` / `LOGIN_MAX_FAILURES_PER_IP` / `LOGIN_WINDOW_SECONDS` | `5` / `20` / `900` | Login rate limiting |
-| `PASSWORD_MIN_LENGTH` | `12` | Minimum password length for provisioned accounts |
-| `LOGIN_RATE_LIMIT_BACKEND` / `LOGIN_RATE_LIMIT_MAX_KEYS` | `auto` / `10000` | Rate-limit store: `auto` = shared `login_failures` table on PostgreSQL, process memory on SQLite (`memory` / `database` force one) |
-| `PG_READER_USER`, `PG_READER_PASSWORD`, `PG_SCOPE_SECRET` | empty | Least-privilege reader role and employee-scope signing secret (migration 005) |
-| `PG_SSLMODE` / `PG_SSLROOTCERT` | `prefer` / empty | PostgreSQL TLS (Azure: `verify-full` with the CA bundle in the image) |
-| `PG_STATEMENT_TIMEOUT_MS`, `SQL_AGENT_MAX_ROWS`, `SQL_AGENT_STATEMENT_TIMEOUT_MS` | see `.env.example` | Database statement limits |
-| `PG_POOL_ENABLED`, `PG_POOL_MAX_SIZE`, `PG_POOL_TIMEOUT_SECONDS`, `PG_POOL_MAX_LIFETIME_SECONDS`, `PG_POOL_VALIDATE_IDLE_SECONDS` | see `.env.example` | PostgreSQL connection pool |
-| `BACKEND_PROXY_SECRET` / `TRUSTED_PROXY_HOPS` | empty / `1` | Azure: shared key the frontend proxy adds (backend rejects requests without it) / proxy hops trusted for the client IP |
-| `API_DOCS` | unset = only when `APP_ENV=development` | `false` hides `/docs`, `/redoc` and `/openapi.json` |
-
-`.env.example` lists every setting with a safe default or a placeholder; secrets are never committed.
+- `.env.example` lists every setting with a safe default or a placeholder.
+- **Azure OpenAI**
+  - `AZURE_OPENAI_ENDPOINT` - resource v1 endpoint, e.g. `https://<resource>.services.ai.azure.com/openai/v1` (`AZURE_OPENAI_BASE_URL` is an alias).
+  - `AZURE_OPENAI_DEPLOYMENT` - deployment name (`gpt-4.1`).
+  - `AZURE_OPENAI_API_KEY` - required for chat answers (missing configuration returns 503; no request is sent).
+  - `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` / `LLM_MAX_OUTPUT_TOKENS` - `30` / `2` / `600`.
+- **Retrieval**
+  - `EMBED_MODEL` - `BAAI/bge-small-en-v1.5`.
+  - `SIMILARITY_THRESHOLD` - `0.65`; `BORDERLINE_MARGIN` - `0.05`; `TOP_K` - `4`.
+  - `CHUNK_WORDS` / `CHUNK_OVERLAP_WORDS` - `350` / `40`.
+- **Database**
+  - `DB_BACKEND` - `sqlite` or `postgresql` (`.env.example` uses `postgresql`); `DB_PATH` - `data/app.db`.
+  - `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`, `PG_PASSWORD` - defaults `localhost`, `5432`, `onboardai`, `postgres`, empty.
+  - `PG_READER_USER`, `PG_READER_PASSWORD`, `PG_SCOPE_SECRET` - least-privilege reader role and employee-scope signing secret (migration 005).
+  - `PG_SSLMODE` / `PG_SSLROOTCERT` - `prefer` / empty (Azure: `verify-full` with the CA bundle in the image).
+  - `PG_STATEMENT_TIMEOUT_MS`, `SQL_AGENT_MAX_ROWS`, `SQL_AGENT_STATEMENT_TIMEOUT_MS` - statement limits.
+  - `PG_POOL_ENABLED`, `PG_POOL_MAX_SIZE`, `PG_POOL_TIMEOUT_SECONDS`, `PG_POOL_MAX_LIFETIME_SECONDS`, `PG_POOL_VALIDATE_IDLE_SECONDS` - connection pool.
+- **Sessions and sign-in**
+  - `APP_ENV` - `development`; `production` disables the account-provisioning tool.
+  - `SESSION_TTL_MINUTES` / `SESSION_IDLE_MINUTES` - `480` / `60`; `SESSION_COOKIE_SECURE` - `auto`.
+  - `LOGIN_MAX_FAILURES_PER_EMAIL` / `LOGIN_MAX_FAILURES_PER_IP` / `LOGIN_WINDOW_SECONDS` - `5` / `20` / `900`.
+  - `LOGIN_RATE_LIMIT_BACKEND` / `LOGIN_RATE_LIMIT_MAX_KEYS` - `auto` / `10000` (shared `login_failures` table on PostgreSQL, process memory on SQLite).
+  - `PASSWORD_MIN_LENGTH` - `12`.
+- **Proxy and API**
+  - `TRUST_PROXY_HEADERS` - `false` (Docker Compose sets `true`); `TRUSTED_PROXY_HOPS` - `1`.
+  - `BACKEND_PROXY_SECRET` - Azure: shared key the frontend proxy adds; the backend rejects requests without it.
+  - `API_DOCS` - unset means docs only when `APP_ENV=development`.
+- **Files and Docker**
+  - `INDEX_DIR`, `RAW_DIR`, `LOG_DIR` - `data/index`, `data/raw`, `logs`.
+  - `DOCKER_PG_PASSWORD` - Docker Compose only (required); `BACKEND_PORT`, `FRONTEND_PORT` - `8000`, `8080` (bound to 127.0.0.1).
 
 ## Local development (Windows PowerShell)
 
-Prerequisites: Python 3.12+ (verified with 3.12 in Docker and 3.14 locally), Node.js 24, and optionally PostgreSQL 16.
+- **Prerequisites:** Python 3.12+, Node.js 24, optionally PostgreSQL 16.
+- **1. Backend environment**
 
-### 1. Backend environment
+  ```powershell
+  python -m venv .venv
+  .\.venv\Scripts\Activate.ps1
+  pip install -r requirements-dev.txt   # pinned runtime + test tools
+  Copy-Item .env.example .env           # then edit .env locally
+  ```
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt   # pinned runtime + test tools (the Docker image uses requirements.txt only)
-Copy-Item .env.example .env      # then edit .env locally
-```
+- **2. Database - option A, SQLite (quickest):** set `DB_BACKEND=sqlite` in `.env`, then:
 
-### 2. Database
+  ```powershell
+  python -c "from backend.services import db; db.init_db()"
+  python backend/migrations/001_employee_schema.py
+  python backend/migrations/002_seed_demo_data.py
+  $env:PYTHONPATH = "."; python backend/migrations/003_employee_chat_history.py
+  python backend/migrations/004_auth_tables.py
+  ```
 
-**Option A - SQLite (quickest).** Set `DB_BACKEND=sqlite` in `.env`, then create and seed `data/app.db`:
+- **2. Database - option B, PostgreSQL 16:**
+  - Create an empty database (for example `onboardai`), set `DB_BACKEND=postgresql` and the `PG_*` values.
+  - Load `docker/postgres/01_schema.sql`, `02_seed.sql` and `03_auth_schema.sql` with `psql -f`.
+  - For an existing database add only the authentication tables: `$env:PYTHONPATH = "."; python backend/migrations/004_auth_tables.py`.
+- **3. Knowledge-base index** (generated, git-ignored; build once after cloning):
 
-```powershell
-python -c "from backend.services import db; db.init_db()"
-python backend/migrations/001_employee_schema.py
-python backend/migrations/002_seed_demo_data.py
-$env:PYTHONPATH = "."; python backend/migrations/003_employee_chat_history.py
-python backend/migrations/004_auth_tables.py
-```
+  ```powershell
+  python -m backend.services.ingest     # "Indexed 65 chunks into ...\data\index"
+  ```
 
-**Option B - PostgreSQL 16.** Create an empty database (for example `onboardai`), set `DB_BACKEND=postgresql` and the `PG_*` values in `.env`, and load the schema and synthetic seed with `psql -f docker/postgres/01_schema.sql` followed by `psql -f docker/postgres/02_seed.sql`. Then load `docker/postgres/03_auth_schema.sql`. These are the same files Docker uses to initialise its database. For an **existing** PostgreSQL database, add only the authentication tables (additive and idempotent; no existing data is changed): `$env:PYTHONPATH = "."; python backend/migrations/004_auth_tables.py`. The backend refuses to start against PostgreSQL until these tables exist.
+- **4. Run**
 
-**Accounts.** Create sign-in accounts for the synthetic employees (see [Authentication and authorization](#authentication-and-authorization)).
+  ```powershell
+  python -m uvicorn backend.main:app --reload --port 8000
+  # second terminal
+  cd frontend
+  npm ci
+  npm run dev
+  ```
 
-### 3. Knowledge-base index
-
-The FAISS index is generated and git-ignored. Build it once after cloning (this overwrites any existing index in `data/index`):
-
-```powershell
-python -m backend.services.ingest     # "Indexed 48 chunks into ...\data\index"
-```
-
-### 4. Run
-
-```powershell
-python -m uvicorn backend.main:app --reload --port 8000
-```
-
-API: http://localhost:8000/health and interactive docs at http://localhost:8000/docs.
-
-In a second terminal:
-
-```powershell
-cd frontend
-npm ci
-npm run dev
-```
-
-Open http://localhost:5173. The Vite dev server proxies `/api/*` to `http://127.0.0.1:8000`.
+  - API: http://localhost:8000/health (interactive docs at http://localhost:8000/docs in development).
+  - App: http://localhost:5173 (the Vite dev server proxies `/api/*` to `http://127.0.0.1:8000`).
+- **5. Accounts:** see [Operations runbook](#operations-runbook).
 
 ## Docker Compose
 
-Runs three containers: `frontend` (nginx serving the built React app and proxying `/api`), `backend` (FastAPI) and `db` (PostgreSQL 16 with a named volume, seeded from `docker/postgres/` on first start).
+- Runs `frontend` (nginx + React build, proxies `/api`), `backend` (FastAPI) and `db` (PostgreSQL 16, named volume, seeded from `docker/postgres/` on first start).
+- **Prerequisites:** Docker Desktop running, `.env` with the LLM settings, FAISS index built (it is mounted read-only).
+- **Start:**
 
-Prerequisites: Docker Desktop running, `.env` with your LLM settings, and the FAISS index built in `data/index` (step 3 above) - it is mounted **read-only** into the backend.
+  ```powershell
+  $env:DOCKER_PG_PASSWORD = "<choose a local value>"   # container database only; never reuse a real password
+  docker compose up -d --build --wait
+  docker compose ps
+  ```
 
-```powershell
-$env:DOCKER_PG_PASSWORD = "<choose a local value>"   # container database only; do not reuse a real password
-docker compose up -d --build --wait
-docker compose ps
-```
+- **Least-privilege start:** the backend refuses to connect as the database owner.
+  - On a new database start only `db`, provision the roles once with migration 005 (`... backend python backend/migrations/005_least_privilege_roles.py --apply`; see [docs/runbook.md](docs/runbook.md#9-database-roles-least-privilege)).
+  - Keep the role passwords and scope secret in a secrets file outside the repository and start with `docker compose --env-file <secrets file> up -d --build --wait`.
+- Open http://localhost:8080 and sign in.
+- Do not run `docker compose config` without `--quiet` when sharing output - it prints resolved secrets.
 
-The backend **refuses to start as the database owner** (a superuser) - it needs the least-privilege roles. On a new database, start only `db`, provision the roles once with migration 005 (`docker compose run --rm --no-deps ... backend python backend/migrations/005_least_privilege_roles.py --apply`, runbook section 9), keep the role passwords and scope secret in a secrets file outside the repository, and start the stack with `docker compose --env-file <secrets file> up -d --build --wait`. Migrations and `manage_accounts` are unaffected (they run as separate commands).
+## Operations runbook
 
-Create accounts in the container database (passwords are entered at a hidden prompt; nothing is created automatically):
+All commands are PowerShell from the project root. Full details: [docs/runbook.md](docs/runbook.md).
 
-```powershell
-docker compose exec backend python -m backend.manage_accounts set --email aarav.sharma@example.com --employee-id EMP001
-docker compose exec backend python -m backend.manage_accounts list
-```
-
-Open http://localhost:8080 and sign in (API also on http://127.0.0.1:8000).
-
-| Task | Command |
-|---|---|
-| Backend logs | `docker compose logs backend` |
-| Stop (keep data) | `docker compose down` |
-| Stop and delete the container database and logs | `docker compose down -v` |
-
-Notes:
-- The container database is separate from any local PostgreSQL; its port is not published.
-- LLM settings come from `.env`; database settings in `docker-compose.yml` override any local `PG_*` values.
-- Do not run `docker compose config` without `--quiet` when sharing output: it prints resolved secrets.
-- The embedding model is built into the backend image; no secrets are copied into images.
+- **Start and stop**
+  - Local: activate `.\.venv\Scripts\Activate.ps1`; backend `python -m uvicorn backend.main:app --reload --port 8000`; frontend `cd frontend; npm run dev`; stop with `Ctrl+C`.
+  - Docker: set `$env:DOCKER_PG_PASSWORD` in each new shell; `docker compose up -d --build --wait`; `docker compose ps`; `docker compose restart backend`.
+  - Stop and keep data: `docker compose down`. Stop and **delete** the container database and logs: `docker compose down -v`.
+  - Experiments: use a separate project name, e.g. `docker compose -p onboardai-test up -d --build --wait` and `docker compose -p onboardai-test down -v`.
+- **Accounts** (never created automatically; passwords via hidden prompt, minimum 12 characters)
+  - Employee: `python -m backend.manage_accounts set --email aarav.sharma@example.com --employee-id EMP001`
+  - Administrator: `python -m backend.manage_accounts set --email admin@novatech.example --role admin`
+  - HR/IT queue: `python -m backend.manage_accounts set --email hr@novatech.example --role hr`
+  - List (no secrets): `python -m backend.manage_accounts list`; disable (ends its sessions): `python -m backend.manage_accounts disable --email <email>`
+  - Docker: prefix with `docker compose exec backend`; for scripted use set `$env:ONBOARDAI_NEW_PASSWORD` and add `--password-env ONBOARDAI_NEW_PASSWORD`.
+  - Re-running `set` with a new password resets it and signs the account out everywhere.
+- **Health checks**
+  - `curl http://localhost:8000/health` and `curl http://localhost:8080/api/health` - expect HTTP 200 `{"status":"ok","database":"ok"}`.
+  - `curl http://localhost:8080/api/employees/EMP001` - expect 401 when not signed in.
+  - `docker compose ps` - `db`, `backend`, `frontend` all `(healthy)`.
+  - `/health` is database-aware (`SELECT 1`, 3-second timeout) and returns 503 when the database is unreachable.
+- **Logs and request tracing**
+  - Local `logs/app.log` (rotating) and console; Docker `docker compose logs backend`.
+  - Format `time | LEVEL | rid=<request id> | message`; every response has `X-Request-ID`, and 500 responses include the same `request_id` - search the log for it.
+  - Questions, API keys, passwords, session identifiers and CSRF tokens are never logged.
+- **Common problems**
+  - 503 "AI service temporarily unavailable" - check the `AZURE_OPENAI_*` settings; search the log for `LLM unavailable:`.
+  - 500 on employee pages - database down; find the `request_id`, then `docker compose ps db` / `docker compose start db`.
+  - `required variable DOCKER_PG_PASSWORD is missing a value` - set it in the current shell.
+  - Seed changes not applied - init scripts run only on an empty volume: `docker compose down -v`, then `up`.
+  - Chat 500 with a FAISS error - build the index with `python -m backend.services.ingest` before `docker compose up`.
+  - 429 "Too many failed sign-in attempts" - wait for `Retry-After`.
+  - Backend refuses to start: "Authentication tables are missing" - run migration 004.
+- **Data and index**
+  - Rebuild the index only after changing `data/raw`: `python -m backend.services.ingest` (new validated version, atomic activation, previous version kept on failure).
+  - CSV import dry run: `python -m scripts.import_csv data/csv` (dedicated import role, migration 006).
+- **Backups:** `pg_dump -Fc` from the `db` container, copied out with `docker compose cp`, SHA-256 recorded; never redirect binary dumps with `>` or `|` in Windows PowerShell 5.1; restore only into a disposable server (see the runbook).
+- **Safety rules**
+  - Never commit `.env` or secrets files; never put passwords in files, scripts or chat.
+  - Keep local ports bound to `127.0.0.1`; use synthetic data only.
+  - The backend must not connect as a PostgreSQL superuser outside local development.
+  - Database migrations (local or Azure) change live data - get approval first; on Azure they run only through the manual in-VNet procedure.
 
 ## RAG workflow and guardrails
 
-1. **Ingestion** (`backend/services/ingest.py`): `handbook.pdf` is the canonical source (the same-stem `handbook.md` is a derived copy and is skipped). Text is extracted per page, split at numbered section headings and into overlapping 2-sentence retrieval windows whose context is the whole section; each FAQ becomes one chunk. Chunks are embedded with fastembed and written to a versioned, validated FAISS index activated atomically (current index: 65 chunks - 40 handbook, 25 FAQ). Citations carry the section and page.
-2. **Routing** (`orchestrator.py`, `employee_query_router.py`): deterministic precedence rules; personal records (onboarding status, checklist, leave balances, assets, tickets, profile) and the payroll calendar come from approved database functions, policy questions go to RAG, and mixed questions return both parts ("From your records" / "From the handbook") in one saved message. Details: [docs/architecture.md](docs/architecture.md#hybrid-chat-routing-phase-2).
-3. **Retrieval** (`retriever.py`): top 4 passages by cosine similarity.
-4. **Retrieval gate** (`guardrails.py`): top score >= 0.65 proceeds; 0.60-0.65 proceeds only if a distinctive question keyword appears in the retrieved passages; otherwise the fallback is returned without calling the LLM.
-5. **Generation** (`llm.py`): temperature 0; passages are wrapped in `<untrusted_context>` and the system prompt forbids following instructions inside documents, inventing facts, or revealing instructions, keys or credentials. The model replies `NOT_FOUND` when the context is insufficient.
-6. **Output validation** (`guardrails.py`): the answer is rejected (fallback returned) if it contains secrets or system-prompt text, has no citation, cites a section that was not retrieved, or states numbers or email addresses absent from the retrieved passages.
-7. **Response**: `{message_id, answer, sources, found}`, where `sources` lists only the cited passages (plus `Your records` / `Company records` labels for database parts); each exchange is stored in chat history exactly once.
+1. **Ingestion** (`backend/services/ingest.py`) - `handbook.pdf` is canonical; text is extracted per page, split at numbered section headings into overlapping 2-sentence retrieval windows with section context; each FAQ is one chunk; 65 chunks in a versioned, validated FAISS index with atomic activation; citations carry section and page.
+2. **Routing** (`orchestrator.py`, `employee_query_router.py`) - deterministic rules: personal records and the payroll calendar from approved database functions, policy questions to RAG, mixed questions answered in both parts.
+3. **Retrieval** (`retriever.py`) - top 4 passages by cosine similarity.
+4. **Retrieval gate** (`guardrails.py`) - score >= 0.65 proceeds; 0.60-0.65 only with a distinctive keyword match; otherwise the fallback is returned without calling the LLM.
+5. **Generation** (`llm.py`) - temperature 0; passages wrapped as untrusted context; instructions inside retrieved text are screened out; the model answers `NOT_FOUND` when the context is insufficient.
+6. **Output validation** (`guardrails.py`) - rejects answers with secrets or system-prompt text, missing or invalid citations, or numbers/emails not in the retrieved passages.
+7. **Response** - `{message_id, answer, sources, found}`; only cited sources are returned; each exchange is saved once.
 
-## Authentication and authorization
+## Security
 
-**Sign-in.** Employees sign in with their work email and password (`POST /auth/login`). Errors are always the generic "Invalid email or password." whether the email exists or not, and unknown emails still go through an Argon2 verification so timing does not reveal accounts. There is no self-registration or password reset; an administrator provisions accounts.
-
-**Passwords.** Stored only as Argon2id hashes (argon2-cffi defaults: time cost 3, 64 MiB, parallelism 4). Minimum length 12. Never logged, never accepted as command-line arguments.
-
-**Sessions.** A successful login always creates a new server-side session (preventing session fixation). The browser receives a 256-bit random identifier in the `onboardai_session` cookie: `HttpOnly`, `SameSite=Strict`, `Path=/`, and `Secure` automatically on HTTPS (`SESSION_COOKIE_SECURE=auto`). The database stores only a SHA-256 hash of the identifier. Sessions end after 8 hours (absolute) or 60 minutes of inactivity; `POST /auth/logout` deletes the server-side session; changing an account's password or disabling it ends all of its sessions. Nothing is stored in `localStorage` or `sessionStorage`.
-
-**CSRF.** Each session has a random CSRF token, returned by `/auth/login` and `/auth/me` and kept in browser memory. Every authenticated `POST`/`PATCH` must send it in the `X-CSRF-Token` header (403 otherwise). Login itself only accepts `application/json`.
-
-**Brute-force protection.** Failed logins are counted per email (5) and per client IP (20) in a 15-minute sliding window; further attempts get `429` with `Retry-After`, even with the correct password. On PostgreSQL (Docker and Azure) the counters live in the shared `login_failures` table (migration 008), so they survive restarts and apply across workers; on SQLite they are kept in process memory.
-
-**Authorization.** The employee is always taken from the session. Employee IDs in URLs, query strings or bodies are accepted only if they match it (403 otherwise, including unknown IDs, so other employees cannot be enumerated).
-
-| Role | Can access |
-|---|---|
-| `employee` (linked to one employee ID) | Own profile, leave, assets, checklist (read/update), tickets (read/create), chat and history, feedback on own messages, escalation, payroll calendar |
-| `admin` (may have no employee) | `POST /ingest`, legacy `/checklist`, payroll calendar, handbook chat; no employee data unless linked to an employee |
-| `hr` (HR/IT support staff, not linked to an employee) | HR/IT escalation queue (`/hr/escalations`): list, view, change status with a note (audit trail) |
-
-**Provisioning (development only).** Accounts for the synthetic employees are created with a CLI that reads the password from a hidden prompt or a named environment variable, is idempotent, and refuses to run when `APP_ENV=production`:
-
-```powershell
-python -m backend.manage_accounts set --email aarav.sharma@example.com --employee-id EMP001
-python -m backend.manage_accounts set --email meera.iyer@example.com --employee-id EMP002
-python -m backend.manage_accounts set --email rohan.verma@example.com --employee-id EMP003
-python -m backend.manage_accounts set --email admin@novatech.example --role admin
-python -m backend.manage_accounts set --email hr@novatech.example --role hr
-python -m backend.manage_accounts list          # emails, roles, links - never hashes
-python -m backend.manage_accounts disable --email aarav.sharma@example.com
-```
-
-For scripted use, set `$env:ONBOARDAI_NEW_PASSWORD = "<value>"` and add `--password-env ONBOARDAI_NEW_PASSWORD`. Choose a unique password per account; no passwords are stored in the repository.
+- **Sign-in:** generic "Invalid email or password." for every failure; unknown emails still run an Argon2 verification (no timing leak); no self-registration.
+- **Passwords:** Argon2id hashes only; minimum 12 characters; never logged or passed as command-line arguments.
+- **Sessions:** new server-side session per login; 256-bit identifier in an `HttpOnly`, `SameSite=Strict` cookie (`Secure` on HTTPS); only its SHA-256 hash is stored; 8 h absolute / 60 min idle; logout and password changes end sessions.
+- **CSRF:** every authenticated `POST`/`PATCH` requires the session's `X-CSRF-Token`.
+- **Brute-force protection:** 5 failures per email and 20 per client IP in 15 minutes -> `429` with `Retry-After`; counters shared in PostgreSQL.
+- **Authorization:** identity always comes from the session; other employees' IDs return 403.
+- **Roles:**
+  - `employee` - own profile, leave, assets, checklist, tickets, chat and history, feedback, escalation, payroll calendar.
+  - `admin` - `POST /ingest`, legacy `/checklist`, payroll calendar, handbook chat; no employee data unless linked.
+  - `hr` - HR/IT escalation queue (`/hr/escalations`): list, view, change status with a note.
+- **Database:** least-privilege `onboardai_app` and `onboardai_reader` roles; row-level security bound to an HMAC-signed employee scope; allow-listed read queries only.
+- **Web:** nginx sends HSTS, a self-only CSP, `X-Frame-Options: DENY` and `nosniff`; API documentation is not public in production.
+- **Production network:** only the frontend is public; the backend is reachable only through a private endpoint; PostgreSQL has no public access and requires verified TLS; SCM/FTP basic authentication is disabled; images are pulled with managed identities.
 
 ## API endpoints
 
-All endpoints return JSON; errors use `{"detail": "<message>"}`. Every response carries an `X-Request-ID` header. Access: **Public** = no session; **Session** = signed in; **Own** = the signed-in employee's own records only; **CSRF** = `X-CSRF-Token` header required.
+- All endpoints return JSON; errors use `{"detail": "<message>"}`; every response carries `X-Request-ID`.
+- Access: **Public** = no session; **Session** = signed in; **Own** = own records only; **CSRF** = `X-CSRF-Token` required.
 
 | Method | Path | Access | Purpose |
 |---|---|---|---|
-| GET | `/health` | Public | Database-aware health check: 200 `{"status":"ok","database":"ok"}`, or 503 when the database is unreachable |
-| GET | `/ready` | Internal (not proxied by nginx) | Readiness: database, schema/migrations, FAISS index, embedding model, configuration; 200 or 503 (App Service health check) |
-| POST | `/auth/login` | Public, rate-limited | Sign in (`email`, `password`); sets the session cookie |
-| GET | `/auth/me` | Session | Current user and CSRF token (restores the session after a refresh) |
-| POST | `/auth/logout` | Session + CSRF | Sign out (server-side session deleted) |
-| POST | `/chat` | Session + CSRF | Ask a question (`question` max 500 chars; optional `employee_id` must be your own) |
-| GET | `/history` | Own | Your chat history (`employee_id` optional and must be your own; `limit` 1-100) |
+| GET | `/health` | Public | Database-aware health check (200 or 503) |
+| GET | `/ready` | Internal | Readiness of database, schema, index, embedding model and configuration (App Service health check) |
+| POST | `/auth/login` | Public, rate-limited | Sign in; sets the session cookie |
+| GET | `/auth/me` | Session | Current user and CSRF token |
+| POST | `/auth/logout` | Session + CSRF | Sign out |
+| POST | `/chat` | Session + CSRF | Ask a question (max 500 characters) |
+| GET | `/history` | Own | Chat history |
 | GET | `/employees/{employee_id}` | Own | Profile |
 | GET | `/employees/{employee_id}/leave-balances` | Own | Leave balances |
 | GET | `/employees/{employee_id}/assets` | Own | Assigned assets |
@@ -308,104 +336,86 @@ All endpoints return JSON; errors use `{"detail": "<message>"}`. Every response 
 | PATCH | `/employees/{employee_id}/checklist/{item_id}` | Own + CSRF | Mark a task done / not done |
 | GET | `/employees/{employee_id}/tickets` | Own | Support tickets |
 | POST | `/employees/{employee_id}/tickets` | Own + CSRF | Create a ticket |
-| GET | `/employees/payroll/calendar` | Session | Company payroll calendar |
-| GET, PATCH | `/checklist`, `/checklist/{item_id}` | Admin (+ CSRF for PATCH) | Legacy shared checklist |
-| POST | `/feedback` | Session + CSRF | Rate an answer (own messages only) |
-| POST | `/escalate` | Session + CSRF | Escalate an own answer to the HR/IT queue |
+| GET | `/employees/payroll/calendar` | Session | Payroll calendar |
+| GET, PATCH | `/checklist`, `/checklist/{item_id}` | Admin (+ CSRF) | Legacy shared checklist |
+| POST | `/feedback` | Session + CSRF | Rate an answer |
+| POST | `/escalate` | Session + CSRF | Escalate an answer to the HR/IT queue |
 | GET | `/hr/escalations`, `/hr/escalations/{escalation_id}` | HR role | Escalation queue and details |
-| PATCH | `/hr/escalations/{escalation_id}` | HR role + CSRF | Change status (allowed transitions only) with an optional note |
+| PATCH | `/hr/escalations/{escalation_id}` | HR role + CSRF | Change status with an optional note |
 | POST | `/ingest` | Admin + CSRF | Rebuild the FAISS index |
 
-Error behaviour: 401 without a valid session; 403 for another employee's data, a missing or invalid CSRF token, or a missing role; 429 for too many failed logins; 422 with a readable message for invalid input; 503 for an LLM outage; and a generic 500 with a `request_id` for unexpected failures (stack traces are logged server-side only).
+- Error behaviour: 401 without a session; 403 for other employees' data, missing CSRF token or role; 429 for too many failed logins; 422 for invalid input; 503 for an LLM outage; generic 500 with a `request_id` for unexpected failures.
 
 ## Testing
 
-Install the pinned development tools first: `pip install -r requirements-dev.txt` (runtime dependencies are in `requirements.txt`, which is all the Docker image installs).
-
-| Command | What it covers | Latest verified result |
-|---|---|---|
-| `python -m pytest -q` | Unit and integration tests (routing, orchestration, RAG, guardrails, auth, isolation, API, error handling, logging, frontend contract, Docker config, evaluation dataset, CSV import, PDF index, feedback/escalation, security headers). Always uses a temporary SQLite database; PostgreSQL connections are blocked. The real-embedding retrieval tests need the FAISS index (`python -m backend.services.ingest`). | **711 passed** (Python 3.12 Docker test image, 25 Nov 2026, including 10 static security checks of the CD workflow; the 133 live-PostgreSQL tests are skipped without a disposable server and run in the next row and in CI) |
-| `ONBOARDAI_PG_TEST_ADMIN_DSN=... python -m pytest tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py tests/integration/test_postgres_m6.py` | Live PostgreSQL roles, RLS, signed scope, isolation attacks, import role, CSV import, schema dictionary, migrations 007 and 008 (HR queue, shared rate limiting) against a **disposable** local server | **133 passed** (24 Nov 2026) |
-| `cd frontend; npm test` / `npm run lint` / `npm run build` | Frontend helper tests, ESLint, production build | **11 passed** / 0 problems / built (M5) |
-| `python -m scripts.hybrid_eval --routing-only` | Held-out routing accuracy (62 questions, deterministic; also a CI regression floor) | **62/62** (M4; 60/62 in M3) |
-| `python -m scripts.hybrid_eval --report docs/azure_eval_report.md` | Held-out end-to-end evaluation: routing, records correctness, refusals, retrieval, grounding, citations, mixed answers, fallbacks, latency by route kind | **Azure OpenAI GPT-4.1 (24 Nov 2026): every quality metric 62/62, 30/30 or 10/10**, retrieval MRR 0.978 ([docs/azure_eval_report.md](docs/azure_eval_report.md)). Historical M4 run with Groq: [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md) |
-| `python -m scripts.import_csv data/csv` / `python -m scripts.schema_dictionary --check` | CSV import dry run (see runbook section 10) / schema dictionary vs a database | - |
-| `bash tests/load/run_isolated_load_test.sh` | Small load test (locust) against a throw-away stack with least-privilege roles; `WITH_EVAL=1` also runs the HTTP evaluation | See [docs/load_test_report.md](docs/load_test_report.md) |
-| `python -m scripts.rag_eval` | Retrieval, grounding, unknown-question, prompt-injection evaluation; needs the Azure OpenAI settings, else LLM cases are reported NOT TESTED. Rewrites `docs/rag_eval_report.md`. `--no-llm` runs deterministic checks only. | **50/50 passed** (Azure OpenAI GPT-4.1, 24 Nov 2026; retrieval MRR 0.971) |
-
-**Continuous integration** (`.github/workflows/ci.yml`, on pushes to `dev`/`main`, pull requests and manual runs): backend tests on Python 3.12 with the index built from `data/raw` and a no-skip check; the live PostgreSQL security suite against a disposable `postgres:16-alpine` container with a per-job random password; frontend test/lint/build on Node 24; Docker image builds with smoke checks (pip check, import, no dev tools in the image, non-root user) and `docker compose config`. No deployment, no image push, no real secrets (the LLM is mocked). Latest runs: #7 (`df18ffd`, Azure deployment), #8 (`6427fd7`, submission cleanup) and #9 (`f69b3bc`, CD workflow and architecture diagram), all jobs passed. Continuous delivery (`cd.yml`) is a separate, manual workflow that requires such a successful CI run for the release commit on `main`; it is implemented; first runs #1-#3 (25 Nov 2026) stopped safely before any production change; both causes - GitHub environment setup and the OIDC subject format - are fixed; no successful release yet.
-
-**Production verification on Azure** (`deploy/azure/70-Verify-Deployment.ps1`, 25 Nov 2026): **17/17 passed** (8 public, 9 signed-in), grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms. See [Azure deployment](#azure-deployment).
-
-Historical checks performed during local development with the earlier Groq provider (scripts not in the repository) (scripts not in the repository): browser end-to-end tests in headless Chrome (16/16 against both the Vite dev server and the Docker stack), Docker integration, restart and persistence checks (18/18 and 4/4), workflow and failure-case sweeps. Step 10 re-ran all of them on 21 Nov 2026, including a live RAG evaluation (50/50). See [docs/final_local_test_report.md](docs/final_local_test_report.md). After authentication was added (21 Nov 2026): browser sign-in/workspace checks 13/13 on both the Docker stack and the Vite dev server, Docker auth checks through nginx 20/20 (including live Groq chat after sign-in), and sessions/accounts persisted across backend restart and full down/up (3/3 each).
-
-## Logging and security notes
-
-- Logs go to the console and `logs/app.log` (rotating), formatted `time | LEVEL | rid=<request id> | message`. Question text, API keys, passwords, session identifiers and CSRF tokens are not logged; failed logins are logged with a short one-way fingerprint of the email, not the email itself.
-- Secrets are supplied only through `.env` or environment variables; `.env` is excluded from git and Docker build contexts.
-- Production (Azure): only the frontend is public; the backend is reachable only through a private endpoint (public network access disabled); PostgreSQL is VNet-injected with no public access, TLS certificate verification and least-privilege roles with row-level security; SCM/FTP basic authentication is disabled; images are pulled with managed identities. Details: [Azure deployment](#azure-deployment) and [docs/architecture.md](docs/architecture.md#deployment-view-azure).
-- Every endpoint except `/health` and `/auth/login` requires a session; employees can only reach their own records; `POST /ingest` requires the admin role. See [Authentication and authorization](#authentication-and-authorization).
-
-## Azure OpenAI (implemented)
-
-Azure OpenAI is the only LLM provider (Groq has been removed). `backend/services/llm.py` uses the OpenAI Python SDK against the resource's v1 endpoint with the Responses API: `model` = the deployment name (`gpt-4.1`), the grounded system prompt as `instructions`, the retrieved passages wrapped as untrusted context in `input`, `temperature=0`, `store=false`; no dated `api-version` is needed. Missing or invalid configuration fails closed (503, no request); provider errors are logged with type and HTTP status only; a content-filtered prompt or an incomplete response produces the standard fallback. Instructions aimed at the assistant inside retrieved text (indirect prompt injection) are removed before the prompt is built, keeping the rest of the policy passage. Evaluation results: `docs/azure_eval_report.md`, `docs/rag_eval_report.md`. Setup and activation: runbook section 13.
+- Install the pinned tools first: `pip install -r requirements-dev.txt`.
+- **Backend:** `python -m pytest -q` - unit and integration tests on a temporary SQLite database (PostgreSQL blocked); needs the FAISS index. Result: **718 passed**.
+- **Live PostgreSQL security suite:** `ONBOARDAI_PG_TEST_ADMIN_DSN=... python -m pytest tests/integration/test_postgres_roles.py tests/integration/test_postgres_m4.py tests/integration/test_postgres_m5.py tests/integration/test_postgres_m6.py` against a **disposable** server - roles, RLS, signed scope, isolation attacks, import role, migrations 007/008. Result: **133 passed**.
+- **Frontend:** `cd frontend; npm test` / `npm run lint` / `npm run build`. Result: **11 passed**, 0 lint problems, build OK.
+- **Routing evaluation:** `python -m scripts.hybrid_eval --routing-only` - 62 held-out questions. Result: **62/62**.
+- **End-to-end held-out evaluation:** `python -m scripts.hybrid_eval --report <output file>` - routing, records, refusals, retrieval, grounding, citations, mixed answers, fallbacks, latency. GPT-4.1 result: all quality metrics 62/62, 30/30 or 10/10; retrieval MRR 0.978.
+- **RAG evaluation:** `python -m scripts.rag_eval` (needs Azure OpenAI settings; `--no-llm` runs deterministic checks only). GPT-4.1 result: **50/50**.
+- **Load test:** `bash tests/load/run_isolated_load_test.sh` - see [docs/load_test_report.md](docs/load_test_report.md) (287 requests, 0 failures).
+- **CSV import / schema dictionary:** `python -m scripts.import_csv data/csv` / `python -m scripts.schema_dictionary --check`.
+- **Production verification:** `deploy/azure/70-Verify-Deployment.ps1` - 8 public checks (health, security headers, hidden docs, sign-in required, generic login error, backend not directly reachable) and 9 signed-in checks (secure cookie, own data, other employees refused, grounded GPT-4.1 answer with citation, fallback, history, sign-out). Result: **17/17**.
 
 ## Azure deployment
 
-Deployed on 25 November 2026 to Azure (South India) with the PowerShell scripts in [deploy/azure/](deploy/azure/README.md) (dry run by default, existing resources reused, no secrets in the repository).
+- **Region:** South India; deployed with PowerShell scripts in [deploy/azure/](deploy/azure/README.md) (dry run by default, existing resources reused, no secrets in the repository).
+- **Frontend Web App** (Linux) - the only public endpoint; HTTPS only, TLS 1.2+, security headers; proxies `/api/*` to the backend.
+- **Backend Web App** (Linux) - FastAPI with the FAISS index and embedding model in the image; **public network access disabled**; reachable only through a private endpoint with private DNS (`privatelink.azurewebsites.net`).
+- **Virtual network** - App Service integration subnet (both apps, route all), private-endpoint subnet and delegated PostgreSQL subnet.
+- **Database** - Azure Database for PostgreSQL Flexible Server 16, VNet-injected, public access disabled, no firewall rules, TLS required and verified; the application uses least-privilege roles with row-level security.
+- **Images** - Azure Container Registry (admin user disabled), pulled with system-assigned managed identities.
+- **LLM** - Azure OpenAI GPT-4.1 deployment; only retrieved handbook passages and the question are sent (never employee records).
+- **Hardening** - SCM/FTP basic authentication disabled, FTPS disabled, health checks `/ready` (backend) and `/healthz` (frontend); database administrator password rotated after migration.
+- **Data migration** - one-time, inside the virtual network, verified by identical table fingerprints; temporary access removed afterwards.
+- **Secrets** - App Service application settings, supplied from an external secrets file; never committed.
+- **Runbook and scripts** - [deploy/azure/README.md](deploy/azure/README.md).
 
-| Component | Deployed configuration |
-|---|---|
-| Frontend | Linux Web App (nginx + React build), the only public endpoint: HTTPS only, TLS 1.2+, security headers, `/api/*` proxied to the backend |
-| Backend | Linux Web App (FastAPI, FAISS index and embedding model in the image); **public network access disabled**, reachable only through a private endpoint (private DNS `privatelink.azurewebsites.net`) |
-| Network | VNet with an App Service integration subnet (both apps, route all), a private-endpoint subnet and a delegated PostgreSQL subnet |
-| Database | Azure Database for PostgreSQL Flexible Server 16, VNet-injected, public access disabled, no firewall rules, TLS required and verified; app uses the least-privilege `onboardai_app` / `onboardai_reader` roles with row-level security |
-| Images | Azure Container Registry (admin user disabled), pulled with system-assigned managed identities |
-| LLM | Azure OpenAI GPT-4.1 deployment (Responses API, `store=false`) |
-| Hardening | SCM/FTP basic authentication disabled on both apps, FTPS disabled, health checks `/ready` and `/healthz`; database administrator password rotated after migration |
+## CI/CD
 
-**Production verification** (`deploy/azure/70-Verify-Deployment.ps1`): 17/17 passed - 8 public checks (health, HSTS/CSP/X-Frame-Options/nosniff, API docs and readiness hidden, sign-in required, generic login error, backend not usable directly) and 9 signed-in checks (secure session cookie, own profile and checklist, other employees' data refused, grounded GPT-4.1 answer citing handbook.pdf page 3 in 4232 ms against a 5000 ms target, out-of-scope fallback, history, sign-out). Migration and deployment evidence: [docs/project_plan.md](docs/project_plan.md).
-
-**Continuous delivery** (`.github/workflows/cd.yml`, implemented 25 Nov 2026; **no successful release yet** - runs #1-#3 stopped safely before any production change, causes fixed): a manual run on `main` with confirmation, only for a commit whose CI passed, rebuilds and validates the FAISS index, builds both production images, scans them separately for vulnerabilities (fixable HIGH/CRITICAL block) and secrets (any secret blocks), and - after approval in the protected GitHub environment `production` - signs in to Azure with GitHub OIDC as a dedicated managed identity (`AcrPush` on the registry, `Website Contributor` on the two Web Apps only; no stored credential), pushes immutable tags (commit SHA + run id + attempt), deploys backend then frontend, verifies health (`/api/health` HTTP 200 with healthy JSON), unchanged configuration and the 8 public checks, and - if a production update was attempted and anything fails - rolls both apps back automatically and verifies the previous images, configuration and health. Database migrations stay manual. Details: [deploy/azure/README.md, section 8](deploy/azure/README.md#8-continuous-delivery-github-actions).
-
-Remaining Azure improvements (not implemented):
-
-1. Move secrets from App Service app settings to Azure Key Vault references, and use managed identity / Entra ID authentication for Azure OpenAI and PostgreSQL instead of keys and passwords.
-2. First execution of the continuous-delivery workflow (implemented; see below). Deployment slots / blue-green releases would need a Standard or higher App Service plan.
-3. Re-validate `SIMILARITY_THRESHOLD`, `BORDERLINE_MARGIN` and `NOT_FOUND` behaviour periodically with real questions.
-4. Decide later whether to keep local accounts or move to an external identity provider (for example Microsoft Entra ID).
+- **Continuous integration** (`.github/workflows/ci.yml`) - runs on every push to `dev`/`main` and on pull requests:
+  - Backend tests on Python 3.12 with the index built from `data/raw` and a no-skip check.
+  - Live PostgreSQL security suite against a disposable PostgreSQL 16 container.
+  - Frontend tests, lint and production build on Node 24.
+  - Docker image builds with smoke checks (dependency check, import, no dev tools, non-root user).
+  - Required on `main` by branch protection (all checks, branch up to date, admins included, no force-push).
+- **Continuous delivery** (`.github/workflows/cd.yml`) - **production deployments are manually triggered and require approval; nothing deploys automatically.**
+  - Trigger: Actions -> CD -> Run workflow on `main` with `confirm` = `deploy`.
+  - Gate: `main` only, successful CI for the exact commit, protected `production` environment with a required reviewer.
+  - Build (no Azure access): FAISS index rebuilt from `data/raw` and validated, both production images built, smoke checks, separate Trivy scans (fixable HIGH/CRITICAL vulnerabilities; secrets of any severity).
+  - Approval: a reviewer approves the `production` deployment.
+  - Release: GitHub OIDC sign-in as a dedicated managed identity (`AcrPush` on the registry, `Website Contributor` on the two Web Apps only; no stored Azure credential); immutable tags (commit SHA + run id + attempt) with recorded digests; backend then frontend deployed through Azure Resource Manager.
+  - Verification: bounded health checks (`/api/health` HTTP 200 with healthy JSON), deployed tags must still match the pushed digests, configuration unchanged apart from the image, 8 public production checks.
+  - Rollback: if anything fails after an image update, both apps return automatically to the previous images, which are then verified.
+  - Database migrations are never part of CD.
+- Release procedure and troubleshooting: [deploy/azure/README.md](deploy/azure/README.md#8-continuous-delivery-github-actions) and [docs/runbook.md](docs/runbook.md#14-production-releases-github-actions-cd).
 
 ## Known limitations
 
-- Azure deployment is a single instance on a Basic (B1) App Service plan (no deployment slots, so a release restarts the apps briefly); continuous delivery is implemented but has not completed a release yet; secrets are App Service app settings (no Key Vault yet); no WAF in front of the public frontend.
-- Authentication is local email/password only: no MFA, no password reset or self-service password change, no external identity provider, no admin UI (admin actions are API-only).
-- Login rate limiting is shared in PostgreSQL (`login_failures`, migration 008) but held in process memory on the SQLite fallback; a locked email blocks that account for up to 15 minutes (possible nuisance lockout). In Docker the backend port 8000 is also published on localhost while `X-Forwarded-For` is trusted, so a local client could bypass the per-IP limit (the per-email limit still applies).
-- Synthetic, single-company knowledge base (48 chunks); retrieval misses some paraphrased questions (documented in the RAG report).
-- Grounding checks are lexical; paraphrased unsupported claims without numbers or emails can pass.
-- The base PostgreSQL schema is provided as a snapshot (`docker/postgres/`); later PostgreSQL changes are idempotent migration scripts (005-008) run manually, not a migration framework.
-- Direct dependencies are pinned (`requirements.txt`, `requirements-dev.txt`); transitive dependencies are not locked. HTTPS is provided by Azure App Service; the local Docker stack is HTTP on localhost only.
-- The load test is a small smoke-level run (10 users, 60 s, records questions only); see [docs/load_test_report.md](docs/load_test_report.md).
-- The five M3 held-out evaluation failures were fixed in M4 (see [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md)); the router remains rule-based, so unusual phrasings can still fall back to the handbook.
-- CSV import is a manual CLI (no upload UI); dates are still stored as text; the import role must be provisioned (migration 006) before importing into PostgreSQL.
-- API documentation is served only in development (`APP_ENV=development`; `API_DOCS=false` in Docker) and nginx blocks `/api/docs`; nginx sends CSP and related security headers (M5). The CSP is self-only (fonts are bundled) except inline styles (`style-src 'unsafe-inline'`, needed by React style attributes).
-- Escalations go to an HR/IT queue (`/hr/escalations`, `hr` role, audit trail) that is API-only (no HR user interface) and are not delivered by email or a ticketing system; feedback has no reviewer UI.
+- Single-instance Basic (B1) App Service plan: no deployment slots, so a release restarts the apps briefly; no autoscaling.
+- Secrets are App Service application settings (no Key Vault references yet); no WAF in front of the public frontend.
+- Local email/password accounts only: no MFA, password reset or external identity provider; admin actions are API-only.
+- The 9 signed-in production checks need an owner-held account and are run manually after a release.
+- Rule-based router: unusual phrasings may fall back to the handbook; grounding checks are lexical.
+- Synthetic, single-company knowledge base (65 chunks).
+- Load testing was local and records-only.
+- The HR/IT escalation queue has no user interface and no email or ticketing integration; feedback has no reviewer UI.
+- CSV import is a manual CLI; dates are stored as text.
+- The CSP allows inline styles (`style-src 'unsafe-inline'`, needed by React style attributes).
 
 ## Documentation
 
-- [docs/submission_evidence.md](docs/submission_evidence.md) - consolidated test, performance, deployment and production-verification evidence (source for the final PDF/PPT)
-- [docs/project_plan.md](docs/project_plan.md) - milestones, step-by-step progress, test evidence, risks
-- [docs/final_local_test_report.md](docs/final_local_test_report.md) - historical local release test (21 Nov 2026)
-- [docs/runbook.md](docs/runbook.md) - start/stop, health checks, logs, troubleshooting
-- [deploy/azure/README.md](deploy/azure/README.md) - Azure deployment runbook (scripts, order, migration, verification, rollback)
-- [docs/demo_script.md](docs/demo_script.md) - earlier 10-minute walkthrough of the local Docker stack (historical)
-- [docs/architecture.md](docs/architecture.md) - architecture and RAG flow
-- [docs/rag_eval_report.md](docs/rag_eval_report.md) - RAG evaluation with GPT-4.1 (50/50)
-- [docs/azure_eval_report.md](docs/azure_eval_report.md) - held-out hybrid evaluation with GPT-4.1 on the production images
-- [docs/hybrid_eval_report.md](docs/hybrid_eval_report.md) - earlier held-out evaluation (Groq era, historical)
-- [docs/load_test_report.md](docs/load_test_report.md) - load test environment and results
+- [docs/architecture.md](docs/architecture.md) - architecture, RAG decision flow, Azure network and CI/CD views
+- [docs/runbook.md](docs/runbook.md) - complete operations guide (start/stop, accounts, health, logs, troubleshooting, roles, backups, releases)
+- [deploy/azure/README.md](deploy/azure/README.md) - Azure deployment runbook and CD configuration
+- [docs/project_plan.md](docs/project_plan.md) - milestones, decisions, verification evidence and evaluation results
 - [docs/problem_statement.md](docs/problem_statement.md) - capstone problem statement
+- [docs/load_test_report.md](docs/load_test_report.md) - load test environment and results
+- [docs/test_questions.md](docs/test_questions.md) and [docs/test_report.md](docs/test_report.md) - early test question set and results
 - [frontend/README.md](frontend/README.md) - frontend notes
 
 ## Author
 
-Eliksha Maheshwari - sole developer (architecture, backend, AI, frontend, DevOps, QA, documentation).
+Eliksha Maheshwari
